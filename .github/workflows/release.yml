@@ -1,0 +1,80 @@
+name: Release
+
+# When the version in peergos-app.json has no tag yet: runs the tests, builds the app ZIP, the source ZIP and
+# SHA256SUMS from the commit (tools/make_release.py), pushes the annotated tag and creates a DRAFT release with
+# the three files. The notes come from release-notes/v<version>.md, or else from the version's CHANGELOG section.
+# Publishing the draft stays a person's decision.
+
+on:
+  push:
+    branches: [main]
+    paths: [peergos-app.json, .github/workflows/release.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version
+        id: v
+        run: |
+          ver=$(python3 -c "import json; print(json.load(open('peergos-app.json'))['version'])")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$ver" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$ver is tagged already - nothing to do"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build from the commit (tests, ZIPs, checksums, tag)
+        if: steps.v.outputs.exists == 'false'
+        env:
+          TZ: UTC
+        run: |
+          git config user.name anderlejan
+          git config user.email anderlejan@users.noreply.github.com
+          python3 tools/make_release.py --out Releases
+
+      - name: Push the tag
+        if: steps.v.outputs.exists == 'false'
+        run: git push origin "refs/tags/v${{ steps.v.outputs.version }}"
+
+      - name: Draft release with the three files
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          if [ -f "release-notes/v$VER.md" ]; then
+            cp "release-notes/v$VER.md" notes.md
+          else
+            awk -v h="## $VER" '$0 == h {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          fi
+          gh release create "v$VER" --draft --verify-tag --title "PeergosEasyEdit $VER" --notes-file notes.md \
+            "Releases/PeergosEasyEdit-v$VER.zip" "Releases/PeergosEasyEdit-Source-v$VER.zip" "Releases/SHA256SUMS-$VER.txt"
+
+      - name: Check the files GitHub holds against SHA256SUMS
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"v$VER\") | .assets[] | \"\(.digest)  \(.name)\"" | sed 's/^sha256://' | sort > github.txt
+          (cd Releases && sha256sum "PeergosEasyEdit-v$VER.zip" "PeergosEasyEdit-Source-v$VER.zip" "SHA256SUMS-$VER.txt") | sort > built.txt
+          cat github.txt
+          diff github.txt built.txt
+          {
+            echo "### Draft release v$VER"
+            echo '```'
+            cat "Releases/SHA256SUMS-$VER.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

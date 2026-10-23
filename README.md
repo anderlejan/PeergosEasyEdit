@@ -57,6 +57,11 @@ python3 tools/make_release.py --dev     # test build: ZIP + unpacked folder in R
 python3 tools/make_release.py           # release build from a clean, committed tree; tags v<version>
 ```
 
+Releases: a push to `main` that changes the version in `peergos-app.json` makes `.github/workflows/release.yml`
+run the tests, build the release with `tools/make_release.py`, push the tag and create a draft release with the
+app ZIP, the source ZIP and `SHA256SUMS-<version>.txt`. The release notes come from `release-notes/v<version>.md`
+(or the version's section of `CHANGELOG.md`). The draft is published by hand after checking it.
+
 `tests/mock_peergos.py` answers like Peergos and can fail on demand: 503 as after a restart of the sandbox's
 service worker, refusals, requests that are never answered, a read-back that differs, failed reads. Every
 "saved" check in the browser tests looks at the bytes the mock holds.
