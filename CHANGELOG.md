@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 Fixed
 - The Notes button did not hide the notes panel (it was always shown).
 - A white border around the app: Peergos' frame page kept the browser's default margin.
