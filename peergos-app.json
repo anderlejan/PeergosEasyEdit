@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "displayName": "PeergosEasyEdit",
+  "version": "1.1.0",
+  "description": "A simple text editor",
+  "author": "anderlejan",
+  "fileTypes": ["text"],
+  "launchable": true,
+  "appIcon": "icon.png",
+  "permissions": [
+    "EDIT_CHOSEN_FILE",
+    "STORE_APP_DATA"
+  ]
+}

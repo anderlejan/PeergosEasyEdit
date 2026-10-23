@@ -1,0 +1,41 @@
+# local settings and secrets – never committed (copy .env.example to .env)
+.env
+*.env
+.env.*
+!.env.example
+
+# build output and releases
+/Releases/
+/dist/
+/build/
+*.zip
+
+# local-only material and test data
+/_local/
+/data/
+/exports/
+/test-results/
+/shots/
+
+# logs and caches
+*.log
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+node_modules/
+npm-debug.log*
+
+# virtual environments
+.venv/
+venv/
+env/
+
+# editors and systems
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

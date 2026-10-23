@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PeergosEasyEdit</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="theme-green-on-black">
+  <header class="toolbar">
+    <span id="docName" class="doc-name" title="">PeergosEasyEdit</span>
+    <button type="button" id="saveBtn" class="primary" title="Save (Ctrl+S)" disabled>Save</button>
+    <button type="button" id="saveAsBtn" title="Save a copy under another name" disabled>Save as…</button>
+    <label title="Save by itself this long after the last change (and at least every 30 s while typing)">Autosave
+      <select id="autoSaveSelect">
+        <option value="0">Off</option>
+        <option value="2">after 2 s</option>
+        <option value="5">after 5 s</option>
+        <option value="10">after 10 s</option>
+        <option value="30">after 30 s</option>
+      </select>
+    </label>
+    <span id="status" class="status" role="status" aria-live="polite"></span>
+    <span class="spacer"></span>
+    <label>Theme
+      <select id="themeSelect">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+        <option value="green-on-black">Green on black</option>
+        <option value="sepia">Sepia</option>
+      </select>
+    </label>
+    <span class="group" role="group" aria-label="Text size">
+      <button type="button" id="fontSmallerBtn" title="Smaller text">A−</button>
+      <span id="fontSizeLabel" class="size-label">14</span>
+      <button type="button" id="fontBiggerBtn" title="Bigger text">A+</button>
+    </span>
+    <label>Font
+      <select id="fontSelect">
+        <optgroup label="Monospaced">
+          <option value="'Courier New', Courier, monospace">Courier New</option>
+          <option value="Consolas, monospace">Consolas</option>
+          <option value="'Lucida Console', 'Lucida Sans Typewriter', monospace">Lucida Console</option>
+          <option value="monospace">System monospace</option>
+        </optgroup>
+        <optgroup label="Proportional">
+          <option value="Arial, sans-serif">Arial</option>
+          <option value="'Times New Roman', Times, serif">Times New Roman</option>
+          <option value="Verdana, sans-serif">Verdana</option>
+          <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+          <option value="Georgia, serif">Georgia</option>
+        </optgroup>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
+    <button type="button" id="notesBtn" aria-pressed="false">Notes</button>
+    <button type="button" id="backupBtn">Backup</button>
+    <button type="button" id="helpBtn">Help</button>
+    <button type="button" id="aboutBtn">About</button>
+  </header>
+
+  <div id="banners" class="banners"></div>
+
+  <main class="workspace">
+    <textarea id="editor" spellcheck="false" readonly aria-label="Text"></textarea>
+    <aside id="notesPanel" class="notes-panel" hidden>
+      <div class="notes-head">
+        <h2>Notes</h2>
+        <button type="button" id="addNoteBtn" class="primary">Add note</button>
+      </div>
+      <p id="notesMessage" class="notes-message" hidden></p>
+      <ul id="notesList" class="notes-list"></ul>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="noteDialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Note</h2>
+      <label class="field">Title <input type="text" id="noteTitle" maxlength="200"></label>
+      <label class="field grow">Text <textarea id="noteText" rows="12"></textarea></label>
+      <div class="dialog-buttons">
+        <button type="button" id="noteCancel">Cancel</button>
+        <button value="save" class="primary">Save note</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog">
+    <form method="dialog" class="dialog-body">
+      <p id="confirmText"></p>
+      <div class="dialog-buttons">
+        <button value="cancel">Cancel</button>
+        <button value="ok" id="confirmOk" class="danger">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="backupDialog">
+    <div class="dialog-body">
+      <div class="dialog-title"><h2>Backup</h2><button type="button" class="close" data-close>Close</button></div>
+      <section>
+        <h3>Copy in this browser</h3>
+        <p>While you edit, the editor keeps a copy of your text in this browser, so a save that fails, or a window
+          closed without saving, does not lose it. The copy stays on this device only.</p>
+        <label class="check"><input type="checkbox" id="localBackupCheck"> Keep a copy of my text in this browser</label>
+        <p><button type="button" id="clearLocalBtn">Delete the copies kept in this browser</button></p>
+      </section>
+      <section>
+        <h3>Notes and settings</h3>
+        <p>Export gives your notes and settings as text you can keep. Import replaces your notes and settings with
+          such a text.</p>
+        <p><button type="button" id="exportBtn">Export</button>
+          <button type="button" id="copyExportBtn" disabled>Copy</button></p>
+        <textarea id="exportText" class="data-text" readonly placeholder="Press Export"></textarea>
+        <textarea id="importText" class="data-text" placeholder="Paste an exported text here"></textarea>
+        <p><button type="button" id="importBtn">Import</button></p>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="helpDialog">
+    <div class="dialog-body">
+      <div class="dialog-title"><h2>Help</h2><button type="button" class="close" data-close>Close</button></div>
+      <div class="prose">
+        <h3>Opening a file</h3>
+        <p>Open a text file from your Peergos Drive with PeergosEasyEdit. Started from the launcher without a file,
+          the editor starts empty and <b>Save</b> asks Peergos for a name and folder.</p>
+        <h3>Saving</h3>
+        <p>Press <b>Save</b> or Ctrl+S. The editor then reads the file back from Peergos and compares it with what it
+          sent. Only then the status says <b>Saved</b>. If anything goes wrong, a red message stays on top until the
+          text is saved, with <b>Try again</b> and <b>Save as…</b>. Your text is never replaced by what Peergos sends
+          back.</p>
+        <p>A dot before the file name and the words <b>Unsaved changes</b> mean the file in Peergos does not have
+          your latest text yet.</p>
+        <p><b>Autosave</b> saves by itself a few seconds after you stop typing (choose how long, or Off), at least
+          every 30 seconds while you keep typing, and when you switch to another window. It is checked the same
+          way as Save. If it fails, the red message says so and autosave tries again 30 seconds later. A text
+          started without a file is not saved automatically, because Peergos would have to ask for a name.</p>
+        <p><b>Save as…</b> saves a copy under another name; Peergos asks for the name. The editor keeps working on the
+          file it opened.</p>
+        <h3>Text that was not saved</h3>
+        <p>The editor keeps a copy of your text in this browser while you type (see <b>Backup</b>). When you open the
+          file again and that copy has changes the file does not have, the editor offers them back. It also tells
+          you when the file is not what you last saved here, for example after it was changed on another device.</p>
+        <h3>File names</h3>
+        <p>Peergos passes the file name to apps in a way that changes the characters <b>+ &amp; # %</b>. The editor
+          notices this and does not open such a file, so it cannot save to the wrong place. Rename the file in your
+          Drive and open it again. Peergos cannot open files whose name has a % sign in any app at the moment.</p>
+        <h3>Text encoding and line endings</h3>
+        <p>Files are read and written as UTF-8. A file that is not valid UTF-8 opens read-only, so it cannot be
+          damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
+        <h3>Look</h3>
+        <p>Theme, text size (A− / A+), font and line wrapping apply and are saved at once.</p>
+        <h3>Notes</h3>
+        <p><b>Notes</b> opens a panel for your own notes about anything. They are saved in the app's own folder in
+          Peergos. If the notes cannot be read, the panel says so and does not change them until they could be
+          read.</p>
+        <h3>Backup</h3>
+        <p><b>Export</b> gives your notes and settings as text to keep; <b>Import</b> replaces your notes and settings
+          with such a text after asking.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="aboutDialog">
+    <div class="dialog-body">
+      <div class="dialog-title"><h2>About PeergosEasyEdit</h2><button type="button" class="close" data-close>Close</button></div>
+      <div class="prose">
+        <p>A simple text editor for files in your Peergos Drive. Version <span id="aboutVersion"></span>.</p>
+        <p>Free software under the GNU General Public License, version 3 or later.</p>
+        <h3>History</h3>
+        <h4>1.1.0 (2026-10-23)</h4>
+        <ul>
+          <li>Saving no longer loses text silently: when Peergos has been idle, the first save used to fail
+            without a message. The editor now repeats such a request, reads the file back to check it, and shows
+            every failure until the text is saved.</li>
+          <li>The editor never replaces your text with what Peergos sends back after saving.</li>
+          <li>Keeps a copy of your text in this browser and offers unsaved changes back when the file is opened
+            again.</li>
+          <li>Files whose names Peergos passes on changed (+ &amp; # %) are not opened, instead of opening empty.</li>
+          <li>A file that could not be read is never shown as empty and cannot be saved over.</li>
+          <li>Files that are not UTF-8 open read-only; Windows line endings and the byte order mark are kept.</li>
+          <li>Autosave (after 5 s by default; 2, 10, 30 s or off in the toolbar).</li>
+          <li>Save as…, Ctrl+S, an "Unsaved changes" mark; settings apply and save at once.</li>
+          <li>Notes that could not be read are no longer replaced by an empty list.</li>
+          <li>Rewritten from scratch; help and history are part of the app instead of its data folder.</li>
+        </ul>
+        <h4>1.0.5 (2025-01-10)</h4>
+        <ul><li>New icon; corrected dates in the history; smaller fixes.</li></ul>
+        <h4>1.0.4 (2025-01-10)</h4>
+        <ul><li>Backup &amp; Restore: export and import notes and settings.</li></ul>
+        <h4>1.0.3 (2025-01-10)</h4>
+        <ul><li>Note titles above their buttons; note changes were logged in the history.</li></ul>
+        <h4>1.0.2 (2025-01-10)</h4>
+        <ul><li>Help window with topics; About shows the history.</li></ul>
+        <h4>1.0.1 (2025-01-10)</h4>
+        <ul><li>Font choice; fixes in the notes list.</li></ul>
+        <h4>1.0.0 (2025-01-09)</h4>
+        <ul><li>First version: text editing, themes, text size, line wrapping, notes, saved settings.</li></ul>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="js/version.js"></script>
+  <script src="js/peergos.js"></script>
+  <script src="js/text.js"></script>
+  <script src="js/backup.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
