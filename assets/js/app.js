@@ -20,8 +20,9 @@ const editor = $('editor');
 
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
                           fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace", localBackup: true,
-                          autoSave: 5};
-const THEMES = ['light', 'dark', 'green-on-black', 'sepia'];
+                          autoSave: 5, lineNumbers: false, showNotes: false};
+const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
+                'blue', 'high-contrast'];
 
 /* ---------- small UI helpers ---------- */
 
@@ -196,6 +197,7 @@ async function loadFile() {
   }
   const decoded = TextCodec.decode(bytes);
   editor.value = decoded.text;
+  LineNumbers.later();
   if (!decoded.ok) {
     doc.loaded = true;
     doc.canSave = false;
@@ -300,6 +302,8 @@ function storeBackupNow() {
 
 function onEdit() {
   refreshState();
+  if (settings.lineNumbers)
+    LineNumbers.later();
   scheduleBackup();
   scheduleAutoSave();
 }
@@ -446,6 +450,8 @@ function cleanSettings(s) {
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
     if (typeof s.localBackup === 'boolean') out.localBackup = s.localBackup;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
+    if (typeof s.lineNumbers === 'boolean') out.lineNumbers = s.lineNumbers;
+    if (typeof s.showNotes === 'boolean') out.showNotes = s.showNotes;
   }
   return out;
 }
@@ -463,7 +469,76 @@ function applySettings() {
   $('fontSelect').value = settings.fontFamily;
   $('localBackupCheck').checked = settings.localBackup;
   $('autoSaveSelect').value = String(settings.autoSave);
+  $('lineNumbersCheck').checked = settings.lineNumbers;
+  $('notesPanel').hidden = !settings.showNotes;
+  $('notesBtn').checked = settings.showNotes;
+  fitSandboxPage();
+  LineNumbers.refresh();
 }
+
+// Peergos' sandbox page (same origin as the app) keeps the browser's 8 px body margin around the app's frame,
+// which shows as a white border. Take it away and paint that page in the theme's colour.
+function fitSandboxPage() {
+  try {
+    const page = window.parent !== window ? window.parent.document : null;
+    if (!page || !page.getElementById('appSandboxId'))
+      return;
+    page.body.style.margin = '0';
+    page.body.style.overflow = 'hidden';
+    page.body.style.background = getComputedStyle(document.body).backgroundColor;
+  } catch (e) {
+    // another origin (an older Peergos): leave it as it is
+  }
+}
+
+/* ---------- line numbers ---------- */
+
+// One number per line of the file. With wrapping on, a long line takes several rows: its height is
+// measured on a hidden copy of the text that has the editor's width and font.
+const LineNumbers = (() => {
+  let timer = null;
+
+  function refresh() {
+    clearTimeout(timer);
+    const on = settings.lineNumbers;
+    $('gutter').hidden = !on;
+    if (!on) {
+      $('gutterLines').replaceChildren();
+      return;
+    }
+    const lines = editor.value.split('\n');
+    const gutter = $('gutter');
+    gutter.style.fontFamily = editor.style.fontFamily;
+    gutter.style.fontSize = editor.style.fontSize;
+    gutter.style.minWidth = (String(lines.length).length + 1.5) + 'ch';
+    const rows = document.createDocumentFragment();
+    if (settings.wrapLines) {
+      const measure = $('measure');
+      measure.style.fontFamily = editor.style.fontFamily;
+      measure.style.fontSize = editor.style.fontSize;
+      measure.style.width = editor.clientWidth + 'px';
+      measure.replaceChildren(...lines.map(l => el('div', {textContent: l || '\u200b'})));
+      const heights = [...measure.children].map(d => d.getBoundingClientRect().height);
+      measure.replaceChildren();
+      lines.forEach((_, i) => rows.append(el('div', {textContent: i + 1, style: 'height:' + heights[i] + 'px'})));
+    } else {
+      lines.forEach((_, i) => rows.append(el('div', {textContent: i + 1})));
+    }
+    $('gutterLines').replaceChildren(rows);
+    follow();
+  }
+
+  function follow() {
+    $('gutterLines').style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
+  }
+
+  function later() {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 120);
+  }
+
+  return {refresh, later, follow};
+})();
 
 function localSettings() {
   try {
@@ -587,6 +662,46 @@ function editNote(note) {
   }, {once: true});
 }
 
+// Every note in one window, each with a tick box, to read and copy at once.
+function showAllNotes() {
+  if (notes === null)
+    return;
+  const list = $('notesAllList');
+  list.replaceChildren(...notes.map((note, i) => el('label', {},
+    el('input', {type: 'checkbox', checked: true, value: String(i)}),
+    el('div', {},
+      el('div', {className: 'note-title', textContent: note.title || 'Untitled note'}),
+      el('div', {className: 'note-body', textContent: note.content || ''})))));
+  if (!notes.length)
+    list.append(el('p', {textContent: 'There are no notes yet.'}));
+  $('notesAllDialog').showModal();
+}
+
+function notesText(selectedOnly) {
+  const boxes = [...$('notesAllList').querySelectorAll('input[type=checkbox]')];
+  return boxes.filter(b => !selectedOnly || b.checked)
+    .map(b => notes[Number(b.value)])
+    .map(n => (n.title || 'Untitled note') + '\n\n' + (n.content || ''))
+    .join('\n\n----------\n\n');
+}
+
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(what + ' copied.');
+  } catch (e) {
+    // the clipboard API may be blocked in Peergos' frames: copy through a selected text box
+    const box = el('textarea', {value: text});
+    box.style.position = 'fixed';
+    box.style.opacity = '0';
+    document.body.append(box);
+    box.select();
+    const ok = document.execCommand('copy');
+    box.remove();
+    toast(ok ? what + ' copied.' : 'Copying is not allowed here: select the text and press Ctrl+C.', ok ? '' : 'error');
+  }
+}
+
 async function deleteNote(note) {
   if (notes === null || !await confirmAction('Delete the note "' + (note.title || 'Untitled note') + '"?', 'Delete'))
     return;
@@ -606,15 +721,8 @@ function exportData() {
   $('copyExportBtn').disabled = false;
 }
 
-async function copyExport() {
-  const text = $('exportText').value;
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('Copied.');
-  } catch (e) {
-    $('exportText').select();
-    toast(document.execCommand('copy') ? 'Copied.' : 'Select the text and copy it with Ctrl+C.');
-  }
+function copyExport() {
+  copyText($('exportText').value, 'The export');
 }
 
 async function importData() {
@@ -650,9 +758,44 @@ async function importData() {
 
 /* ---------- wiring ---------- */
 
+// Drop-down menus: one open at a time; Escape, a click outside or choosing an item closes it.
+function wireMenus() {
+  const menus = [['fileMenuBtn', 'fileMenu'], ['optionsMenuBtn', 'optionsMenu']];
+  const closeAll = except => {
+    for (const [b, m] of menus)
+      if (m !== except) {
+        $(m).hidden = true;
+        $(b).setAttribute('aria-expanded', 'false');
+      }
+  };
+  for (const [b, m] of menus) {
+    $(b).onclick = e => {
+      e.stopPropagation();
+      const open = $(m).hidden;
+      closeAll(m);
+      $(m).hidden = !open;
+      $(b).setAttribute('aria-expanded', String(open));
+      if (open) {
+        const first = $(m).querySelector('button:not(:disabled), select, input');
+        if (first) first.focus();
+      }
+    };
+    $(m).addEventListener('click', e => {
+      if (e.target.closest('button'))   // an action was chosen; controls (select, tick boxes) keep it open
+        closeAll(null);
+    });
+  }
+  document.addEventListener('click', e => { if (!e.target.closest('.menu')) closeAll(null); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(null); });
+}
+
 function wire() {
+  wireMenus();
   editor.addEventListener('input', onEdit);
+  editor.addEventListener('scroll', () => LineNumbers.follow());
+  window.addEventListener('resize', () => LineNumbers.later());
   $('saveBtn').onclick = save;
+  $('saveMenuItem').onclick = save;
   $('saveAsBtn').onclick = saveAs;
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
@@ -672,6 +815,7 @@ function wire() {
   $('themeSelect').onchange = e => changeSetting('theme', e.target.value);
   $('fontSelect').onchange = e => changeSetting('fontFamily', e.target.value);
   $('wrapCheck').onchange = e => changeSetting('wrapLines', e.target.checked);
+  $('lineNumbersCheck').onchange = e => changeSetting('lineNumbers', e.target.checked);
   $('autoSaveSelect').onchange = e => {
     changeSetting('autoSave', Number(e.target.value));
     autoFailed = false;
@@ -690,12 +834,16 @@ function wire() {
     Backup.clearAll().then(() => toast('Deleted.'), e => toast('Could not delete: ' + e.message, 'error'));
   };
 
-  $('notesBtn').onclick = () => {
-    const panel = $('notesPanel');
-    panel.hidden = !panel.hidden;
-    $('notesBtn').setAttribute('aria-pressed', String(!panel.hidden));
+  $('notesBtn').onchange = e => {
+    changeSetting('showNotes', e.target.checked);
+    LineNumbers.later();   // the editor's width changed
   };
   $('addNoteBtn').onclick = () => editNote(null);
+  $('showNotesBtn').onclick = showAllNotes;
+  $('notesAllSelect').onclick = () => $('notesAllList').querySelectorAll('input').forEach(b => { b.checked = true; });
+  $('notesAllNone').onclick = () => $('notesAllList').querySelectorAll('input').forEach(b => { b.checked = false; });
+  $('notesCopySelected').onclick = () => copyText(notesText(true), 'Selected notes');
+  $('notesCopyAll').onclick = () => copyText(notesText(false), 'All notes');
   $('noteCancel').onclick = () => $('noteDialog').close('cancel');
   $('backupBtn').onclick = () => $('backupDialog').showModal();
   $('helpBtn').onclick = () => $('helpDialog').showModal();

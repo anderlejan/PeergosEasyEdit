@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+Fixed
+- The Notes button did not hide the notes panel (it was always shown).
+- A white border around the app: Peergos' frame page kept the browser's default margin.
+
+Added
+- **Options** menu (theme, font, autosave, line wrapping, line numbers, notes panel, backup, help, about) and a
+  **File** menu, so everything fits in one compact bar.
+- Optional line numbers, also for wrapped lines.
+- Six more themes: amber on black, Solarized light and dark, Nord, blue (classic), high contrast.
+- **Show all** in the notes panel: every note in one window, tick the ones to copy, or copy all.
+
+Changed
+- The notes panel and line numbers are remembered like the other settings. Slightly darker button colours in the
+  dark theme for better contrast.
+
 ## 1.1.0
 Rewritten from scratch; the same notes and settings – an upgrade keeps them.
 

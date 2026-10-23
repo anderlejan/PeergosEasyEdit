@@ -27,6 +27,7 @@ ap.add_argument('--url', default=os.environ['PEERGOS_URL'])
 ap.add_argument('--zip', required=True)
 ap.add_argument('--scenario', required=True)
 ap.add_argument('--install', action='store_true')
+ap.add_argument('--shots', default=os.path.join(WORK, 'shots'))
 ap.add_argument('--display', default='PeergosEasyEdit')
 ap.add_argument('--jar', default=os.environ['PEERGOS_JAR'])
 ap.add_argument('--chromium', default=os.environ.get('CHROMIUM'))
@@ -210,6 +211,30 @@ def main():
                 print('[%s] status=%r banners=%r' % (label, st['status'], st['banners']), flush=True)
                 print('  requests:', *[l for l in log if 'docs' in l and ('PUT' in l or 'GET' in l) and 'FAILED' not in l], sep='\n    ')
                 print('  RESULT: %s' % ('SAVED BY AUTOSAVE' if after == text else 'NOT SAVED: %r' % after), flush=True)
+            close_app(page)
+
+        if A.scenario == 'shot':   # screenshots of the app in the real sandbox (--shots DIR)
+            f = open_file(page, '/%s/docs' % USER, 'notes.txt')
+            os.makedirs(A.shots, exist_ok=True)
+            page.screenshot(path=os.path.join(A.shots, 'page.png'))
+            page.query_selector('#sandboxId').screenshot(path=os.path.join(A.shots, 'app-area.png'))
+            if f.evaluate("!!document.getElementById('optionsMenuBtn')"):
+                f.click('#optionsMenuBtn')
+                time.sleep(0.5)
+                page.screenshot(path=os.path.join(A.shots, 'options.png'))
+                f.evaluate("['lineNumbersCheck', 'notesBtn'].forEach(id => { const c = document.getElementById(id); if (!c.checked) c.click(); })")
+                f.click('#fileMenuBtn')
+                time.sleep(0.8)
+                page.screenshot(path=os.path.join(A.shots, 'file-menu-lines-notes.png'))
+            inner = page.query_selector('#sandboxId').content_frame()
+            print('sandbox page body margin:', inner.evaluate("getComputedStyle(document.body).margin"),
+                  '| app frame box:', inner.evaluate("(() => { const r = document.getElementById('appSandboxId').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()"))
+            info = page.evaluate("""() => { const o = document.querySelector('#sandboxId'); const r = o.getBoundingClientRect();
+                const cs = getComputedStyle(o); return {outer: [r.x, r.y, r.width, r.height], border: cs.border, padding: cs.padding,
+                parentBg: getComputedStyle(o.parentElement).backgroundColor}; }""")
+            print('outer iframe:', info)
+            print('app:', f.evaluate("""() => ({body: [document.body.clientWidth, document.body.clientHeight], bodyBg: getComputedStyle(document.body).backgroundColor,
+                html: getComputedStyle(document.documentElement).backgroundColor, theme: document.body.className})"""))
             close_app(page)
 
         if A.scenario == 'upgrade':

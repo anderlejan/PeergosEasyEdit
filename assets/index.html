@@ -9,64 +9,90 @@
 <body class="theme-green-on-black">
   <header class="toolbar">
     <span id="docName" class="doc-name" title="">PeergosEasyEdit</span>
+    <div class="menu">
+      <button type="button" class="menu-button" id="fileMenuBtn" aria-haspopup="true" aria-expanded="false">File ▾</button>
+      <div class="menu-panel" id="fileMenu" role="menu" hidden>
+        <button type="button" role="menuitem" id="saveMenuItem">Save <kbd>Ctrl+S</kbd></button>
+        <button type="button" role="menuitem" id="saveAsBtn" disabled>Save as… <kbd>Ctrl+Shift+S</kbd></button>
+      </div>
+    </div>
     <button type="button" id="saveBtn" class="primary" title="Save (Ctrl+S)" disabled>Save</button>
-    <button type="button" id="saveAsBtn" title="Save a copy under another name" disabled>Save as…</button>
-    <label title="Save by itself this long after the last change (and at least every 30 s while typing)">Autosave
-      <select id="autoSaveSelect">
-        <option value="0">Off</option>
-        <option value="2">after 2 s</option>
-        <option value="5">after 5 s</option>
-        <option value="10">after 10 s</option>
-        <option value="30">after 30 s</option>
-      </select>
-    </label>
-    <span id="status" class="status" role="status" aria-live="polite"></span>
-    <span class="spacer"></span>
-    <label>Theme
-      <select id="themeSelect">
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-        <option value="green-on-black">Green on black</option>
-        <option value="sepia">Sepia</option>
-      </select>
-    </label>
     <span class="group" role="group" aria-label="Text size">
       <button type="button" id="fontSmallerBtn" title="Smaller text">A−</button>
       <span id="fontSizeLabel" class="size-label">14</span>
       <button type="button" id="fontBiggerBtn" title="Bigger text">A+</button>
     </span>
-    <label>Font
-      <select id="fontSelect">
-        <optgroup label="Monospaced">
-          <option value="'Courier New', Courier, monospace">Courier New</option>
-          <option value="Consolas, monospace">Consolas</option>
-          <option value="'Lucida Console', 'Lucida Sans Typewriter', monospace">Lucida Console</option>
-          <option value="monospace">System monospace</option>
-        </optgroup>
-        <optgroup label="Proportional">
-          <option value="Arial, sans-serif">Arial</option>
-          <option value="'Times New Roman', Times, serif">Times New Roman</option>
-          <option value="Verdana, sans-serif">Verdana</option>
-          <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
-          <option value="Georgia, serif">Georgia</option>
-        </optgroup>
-      </select>
-    </label>
-    <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
-    <button type="button" id="notesBtn" aria-pressed="false">Notes</button>
-    <button type="button" id="backupBtn">Backup</button>
-    <button type="button" id="helpBtn">Help</button>
-    <button type="button" id="aboutBtn">About</button>
+    <span id="status" class="status" role="status" aria-live="polite"></span>
+    <span class="spacer"></span>
+    <div class="menu">
+      <button type="button" class="menu-button" id="optionsMenuBtn" aria-haspopup="true" aria-expanded="false">Options ▾</button>
+      <div class="menu-panel menu-right options" id="optionsMenu" hidden>
+        <label>Theme
+          <select id="themeSelect">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="green-on-black">Green on black</option>
+            <option value="amber-on-black">Amber on black</option>
+            <option value="sepia">Sepia</option>
+            <option value="solarized-light">Solarized light</option>
+            <option value="solarized-dark">Solarized dark</option>
+            <option value="nord">Nord</option>
+            <option value="blue">Blue (classic)</option>
+            <option value="high-contrast">High contrast</option>
+          </select>
+        </label>
+        <label>Font
+          <select id="fontSelect">
+            <optgroup label="Monospaced">
+              <option value="'Courier New', Courier, monospace">Courier New</option>
+              <option value="Consolas, monospace">Consolas</option>
+              <option value="'Lucida Console', 'Lucida Sans Typewriter', monospace">Lucida Console</option>
+              <option value="monospace">System monospace</option>
+            </optgroup>
+            <optgroup label="Proportional">
+              <option value="Arial, sans-serif">Arial</option>
+              <option value="'Times New Roman', Times, serif">Times New Roman</option>
+              <option value="Verdana, sans-serif">Verdana</option>
+              <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+              <option value="Georgia, serif">Georgia</option>
+            </optgroup>
+          </select>
+        </label>
+        <label title="Save by itself this long after the last change (and at least every 30 s while typing)">Autosave
+          <select id="autoSaveSelect">
+            <option value="0">Off</option>
+            <option value="2">after 2 s</option>
+            <option value="5">after 5 s</option>
+            <option value="10">after 10 s</option>
+            <option value="30">after 30 s</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
+        <label class="check"><input type="checkbox" id="lineNumbersCheck"> Line numbers</label>
+        <label class="check"><input type="checkbox" id="notesBtn"> Notes panel</label>
+        <hr>
+        <button type="button" id="backupBtn">Backup…</button>
+        <button type="button" id="helpBtn">Help…</button>
+        <button type="button" id="aboutBtn">About…</button>
+      </div>
+    </div>
   </header>
 
   <div id="banners" class="banners"></div>
 
   <main class="workspace">
-    <textarea id="editor" spellcheck="false" readonly aria-label="Text"></textarea>
+    <div class="editor-area">
+      <div id="gutter" class="gutter" aria-hidden="true" hidden><div id="gutterLines"></div></div>
+      <textarea id="editor" spellcheck="false" readonly aria-label="Text"></textarea>
+      <div id="measure" class="measure" aria-hidden="true"></div>
+    </div>
     <aside id="notesPanel" class="notes-panel" hidden>
       <div class="notes-head">
         <h2>Notes</h2>
-        <button type="button" id="addNoteBtn" class="primary">Add note</button>
+        <span class="notes-buttons">
+          <button type="button" id="showNotesBtn" title="All notes in one window, to read or copy">Show all</button>
+          <button type="button" id="addNoteBtn" class="primary">Add note</button>
+        </span>
       </div>
       <p id="notesMessage" class="notes-message" hidden></p>
       <ul id="notesList" class="notes-list"></ul>
@@ -95,6 +121,20 @@
         <button value="ok" id="confirmOk" class="danger">OK</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="notesAllDialog">
+    <div class="dialog-body">
+      <div class="dialog-title"><h2>All notes</h2><button type="button" class="close" data-close>Close</button></div>
+      <p class="dialog-buttons left">
+        <button type="button" id="notesAllSelect">Select all</button>
+        <button type="button" id="notesAllNone">Select none</button>
+        <span class="spacer"></span>
+        <button type="button" id="notesCopySelected" class="primary">Copy selected</button>
+        <button type="button" id="notesCopyAll">Copy all</button>
+      </p>
+      <div id="notesAllList" class="notes-all"></div>
+    </div>
   </dialog>
 
   <dialog id="backupDialog">
@@ -152,14 +192,17 @@
         <p>Files are read and written as UTF-8. A file that is not valid UTF-8 opens read-only, so it cannot be
           damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
         <h3>Look</h3>
-        <p>Theme, text size (A− / A+), font and line wrapping apply and are saved at once.</p>
+        <p>A− and A+ change the text size. Under <b>Options</b>: theme, font, autosave, line wrapping, line numbers
+          and the notes panel. Every choice applies and is saved at once, in Peergos, so it is the same on every
+          device.</p>
         <h3>Notes</h3>
-        <p><b>Notes</b> opens a panel for your own notes about anything. They are saved in the app's own folder in
-          Peergos. If the notes cannot be read, the panel says so and does not change them until they could be
-          read.</p>
+        <p><b>Options → Notes panel</b> shows a panel for your own notes about anything. They are saved in the
+          app's own folder in Peergos. <b>Show all</b> puts every note in one window with a tick box each, to read
+          them together or copy the ticked ones. If the notes cannot be read, the panel says so and does not change
+          them until they could be read.</p>
         <h3>Backup</h3>
-        <p><b>Export</b> gives your notes and settings as text to keep; <b>Import</b> replaces your notes and settings
-          with such a text after asking.</p>
+        <p><b>Options → Backup</b>: <b>Export</b> gives your notes and settings as text to keep; <b>Import</b>
+          replaces your notes and settings with such a text after asking.</p>
       </div>
     </div>
   </dialog>
