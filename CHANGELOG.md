@@ -11,10 +11,20 @@ Added
 - Optional line numbers, also for wrapped lines.
 - Six more themes: amber on black, Solarized light and dark, Nord, blue (classic), high contrast.
 - **Show all** in the notes panel: every note in one window, tick the ones to copy, or copy all.
+- **Open…** and **Save as…** browse the folders you let the editor use (Peergos asks once, on any device), with
+  new folders; Peergos' file picker for any other file. Names with `+ & # %` work there.
+- Starts from the launcher with the full editor: New text, Open…, recent files and unsaved texts.
+- Optional **tabs**; the tabs left open come back the next time, on any device.
+- **Recent files** in the File menu (5, 10 or 20, or off); a file deleted or moved meanwhile is marked as not found.
+- Before saving, the editor checks that the file was not changed or deleted elsewhere since it was opened, and
+  asks what to do instead of overwriting.
 
 Changed
 - The notes panel and line numbers are remembered like the other settings. Slightly darker button colours in the
   dark theme for better contrast.
+- Nothing is kept on the device any more: text not yet saved is kept as a draft in the app's Peergos folder
+  (encrypted, on every device) instead of in the browser. Unsaved texts kept in the browser by 1.1.0 are moved
+  there on the first start, then deleted from the browser. Settings are read only from Peergos.
 
 ## 1.1.0
 Rewritten from scratch; the same notes and settings – an upgrade keeps them.

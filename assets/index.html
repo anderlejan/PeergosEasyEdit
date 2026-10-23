@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="loading">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,8 +12,15 @@
     <div class="menu">
       <button type="button" class="menu-button" id="fileMenuBtn" aria-haspopup="true" aria-expanded="false">File ▾</button>
       <div class="menu-panel" id="fileMenu" role="menu" hidden>
+        <button type="button" role="menuitem" id="newMenuItem">New</button>
+        <button type="button" role="menuitem" id="openMenuItem">Open…</button>
+        <div class="menu-label">Recent files</div>
+        <div id="recentMenu" class="recent-list"></div>
+        <hr>
         <button type="button" role="menuitem" id="saveMenuItem">Save <kbd>Ctrl+S</kbd></button>
         <button type="button" role="menuitem" id="saveAsBtn" disabled>Save as… <kbd>Ctrl+Shift+S</kbd></button>
+        <hr>
+        <button type="button" role="menuitem" id="closeMenuItem" disabled>Close</button>
       </div>
     </div>
     <button type="button" id="saveBtn" class="primary" title="Save (Ctrl+S)" disabled>Save</button>
@@ -67,6 +74,16 @@
             <option value="30">after 30 s</option>
           </select>
         </label>
+        <label title="How many recently opened files File lists (kept in Peergos)">Recent files
+          <select id="recentSelect">
+            <option value="0">Off</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+        <label class="check" title="Several files open at once; the open tabs come back next time, on any device">
+          <input type="checkbox" id="tabsCheck"> Tabs</label>
         <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
         <label class="check"><input type="checkbox" id="lineNumbersCheck"> Line numbers</label>
         <label class="check"><input type="checkbox" id="notesBtn"> Notes panel</label>
@@ -78,12 +95,23 @@
     </div>
   </header>
 
+  <nav id="tabs" class="tabs" hidden></nav>
+
   <div id="banners" class="banners"></div>
 
   <main class="workspace">
-    <div class="editor-area">
+    <div class="editor-area" id="editorArea">
       <div id="gutter" class="gutter" aria-hidden="true" hidden><div id="gutterLines"></div></div>
-      <textarea id="editor" spellcheck="false" readonly aria-label="Text"></textarea>
+      <section id="startPanel" class="start-panel" hidden>
+        <h2>PeergosEasyEdit</h2>
+        <p class="start-buttons">
+          <button type="button" id="startNew" class="primary">New text</button>
+          <button type="button" id="startOpen">Open…</button>
+        </p>
+        <h3>Recent files</h3>
+        <div id="startRecent" class="recent-list"></div>
+        <div id="startDrafts" class="recent-list"></div>
+      </section>
       <div id="measure" class="measure" aria-hidden="true"></div>
     </div>
     <aside id="notesPanel" class="notes-panel" hidden>
@@ -109,6 +137,51 @@
       <div class="dialog-buttons">
         <button type="button" id="noteCancel">Cancel</button>
         <button value="save" class="primary">Save note</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="fileDialog" class="file-dialog">
+    <div class="dialog-body">
+      <div class="dialog-title"><h2 id="fdTitle">Open</h2></div>
+      <div class="fd-main">
+        <div id="fdRoots" class="fd-roots" aria-label="Granted folders"></div>
+        <div class="fd-folder">
+          <div id="fdCrumbs" class="fd-crumbs"></div>
+          <div id="fdList" class="fd-list"></div>
+        </div>
+      </div>
+      <p id="fdMessage" class="fd-message" hidden></p>
+      <div id="fdSaveRow" class="fd-save-row">
+        <button type="button" id="fdNewFolder">New folder</button>
+        <label>File name <input type="text" id="fdName" maxlength="255" spellcheck="false"></label>
+      </div>
+      <div class="dialog-buttons">
+        <button type="button" id="fdPicker" class="link-button" title="Any file in your drive, for this session only">Pick any file with Peergos' picker…</button>
+        <span class="spacer"></span>
+        <button type="button" id="fdCancel">Cancel</button>
+        <button type="button" id="fdOk" class="primary">Open</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="choiceDialog">
+    <form method="dialog" class="dialog-body">
+      <p id="choiceText"></p>
+      <div class="dialog-buttons">
+        <button value="cancel">Cancel</button>
+        <button value="discard">Don't save</button>
+        <button value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="promptDialog">
+    <form method="dialog" class="dialog-body">
+      <label class="field"><span id="promptLabel"></span> <input type="text" id="promptInput" maxlength="255"></label>
+      <div class="dialog-buttons">
+        <button type="button" id="promptCancel">Cancel</button>
+        <button value="ok" id="promptOk" class="primary">OK</button>
       </div>
     </form>
   </dialog>
@@ -141,11 +214,12 @@
     <div class="dialog-body">
       <div class="dialog-title"><h2>Backup</h2><button type="button" class="close" data-close>Close</button></div>
       <section>
-        <h3>Copy in this browser</h3>
-        <p>While you edit, the editor keeps a copy of your text in this browser, so a save that fails, or a window
-          closed without saving, does not lose it. The copy stays on this device only.</p>
-        <label class="check"><input type="checkbox" id="localBackupCheck"> Keep a copy of my text in this browser</label>
-        <p><button type="button" id="clearLocalBtn">Delete the copies kept in this browser</button></p>
+        <h3>Drafts in Peergos</h3>
+        <p>Text that is not in its file yet – a new text, changes while autosave is off, or a save that failed – is
+          kept as a draft in the app's own folder in Peergos, encrypted like your files, and offered back on any
+          device. Nothing is kept on this device.</p>
+        <label class="check"><input type="checkbox" id="draftsCheck"> Keep drafts of unsaved text in Peergos</label>
+        <p><button type="button" id="deleteDraftsBtn">Delete all drafts</button></p>
       </section>
       <section>
         <h3>Notes and settings</h3>
@@ -165,8 +239,15 @@
       <div class="dialog-title"><h2>Help</h2><button type="button" class="close" data-close>Close</button></div>
       <div class="prose">
         <h3>Opening a file</h3>
-        <p>Open a text file from your Peergos Drive with PeergosEasyEdit. Started from the launcher without a file,
-          the editor starts empty and <b>Save</b> asks Peergos for a name and folder.</p>
+        <p>Open a text file from your Peergos Drive with PeergosEasyEdit, or start the editor from the launcher and
+          use <b>File → Open…</b>. Started from the launcher, the editor shows <b>New text</b>, <b>Open…</b>, your
+          recent files and any unsaved texts kept in Peergos.</p>
+        <h3>Granted folders</h3>
+        <p><b>Open…</b> and <b>Save as…</b> browse the folders you let the editor use. Choose <b>+ Add
+          folders…</b>: Peergos asks which folders. Peergos remembers them on every device until you remove them
+          (× next to the folder, or in the app's details on the Peergos launcher). Your home folder itself cannot be granted,
+          the folders in it can. <b>Pick any file with Peergos' picker…</b> opens one file without granting its folder;
+          such a file can be edited only until the editor is closed.</p>
         <h3>Saving</h3>
         <p>Press <b>Save</b> or Ctrl+S. The editor then reads the file back from Peergos and compares it with what it
           sent. Only then the status says <b>Saved</b>. If anything goes wrong, a red message stays on top until the
@@ -174,16 +255,35 @@
           back.</p>
         <p>A dot before the file name and the words <b>Unsaved changes</b> mean the file in Peergos does not have
           your latest text yet.</p>
+        <p>Before saving, the editor checks that the file is still the one it opened. If it was changed somewhere
+          else (another device or app), nothing is saved and you choose: <b>Show their version</b>, <b>Overwrite
+          with mine</b> or <b>Save mine as…</b>. If it was deleted, moved or renamed, you can save it there again or
+          somewhere else.</p>
         <p><b>Autosave</b> saves by itself a few seconds after you stop typing (choose how long, or Off), at least
           every 30 seconds while you keep typing, and when you switch to another window. It is checked the same
-          way as Save. If it fails, the red message says so and autosave tries again 30 seconds later. A text
-          started without a file is not saved automatically, because Peergos would have to ask for a name.</p>
-        <p><b>Save as…</b> saves a copy under another name; Peergos asks for the name. The editor keeps working on the
-          file it opened.</p>
+          way as Save. If it fails, the red message says so and autosave tries again 30 seconds later. A new text
+          is not saved automatically: it needs a name first (<b>Save</b> asks for one).</p>
+        <p><b>Save as…</b> saves the text into a granted folder under the name you choose, and the editor goes on
+          with the new file. Without granted folders, Peergos' own save dialog is used and the editor keeps working
+          on the file it opened.</p>
+        <h3>Tabs</h3>
+        <p><b>Options → Tabs</b> lets you keep several files open, one per tab (+ starts a new text). Without tabs,
+          opening a file closes the one before (asking first if it has unsaved changes). With tabs, the tabs you
+          leave open come back the next time the editor starts, on any device. A file opened from the Drive comes
+          back only if it is in a granted folder.</p>
+        <h3>Recent files</h3>
+        <p><b>File</b> lists the files you opened last (how many: <b>Options → Recent files</b>, or off). A file
+          that was deleted or moved meanwhile is marked <i>not found</i>; × removes it from the list. The list is
+          kept in Peergos, so it is the same on every device.</p>
         <h3>Text that was not saved</h3>
-        <p>The editor keeps a copy of your text in this browser while you type (see <b>Backup</b>). When you open the
-          file again and that copy has changes the file does not have, the editor offers them back. It also tells
-          you when the file is not what you last saved here, for example after it was changed on another device.</p>
+        <p>Text that is not in its file yet – a new text, changes while autosave is off, or a save that failed – is
+          kept as a draft in the app's own folder in Peergos (see <b>Backup</b>). When you open the file again,
+          the editor offers those changes back. An unsaved new text comes back in its tab, or is offered on the
+          start screen.</p>
+        <h3>Privacy</h3>
+        <p>The editor keeps nothing on this device: no texts, no drafts, no file names, no settings – not in
+          browser storage and not in the browser's databases. Everything it keeps is in Peergos, encrypted like
+          your files. It makes no requests outside Peergos.</p>
         <h3>File names</h3>
         <p>Peergos passes the file name to apps in a way that changes the characters <b>+ &amp; # %</b>. The editor
           notices this and does not open such a file, so it cannot save to the wrong place. Rename the file in your
@@ -193,7 +293,7 @@
           damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
         <h3>Look</h3>
         <p>A− and A+ change the text size. Under <b>Options</b>: theme, font, autosave, line wrapping, line numbers
-          and the notes panel. Every choice applies and is saved at once, in Peergos, so it is the same on every
+          the notes panel, tabs and recent files. Every choice applies and is saved at once, in Peergos, so it is the same on every
           device.</p>
         <h3>Notes</h3>
         <p><b>Options → Notes panel</b> shows a panel for your own notes about anything. They are saved in the
@@ -201,8 +301,9 @@
           them together or copy the ticked ones. If the notes cannot be read, the panel says so and does not change
           them until they could be read.</p>
         <h3>Backup</h3>
-        <p><b>Options → Backup</b>: <b>Export</b> gives your notes and settings as text to keep; <b>Import</b>
-          replaces your notes and settings with such a text after asking.</p>
+        <p><b>Options → Backup</b>: drafts of unsaved text can be switched off or deleted there. <b>Export</b>
+          gives your notes and settings as text to keep; <b>Import</b> replaces your notes and settings with such a
+          text after asking.</p>
       </div>
     </div>
   </dialog>
@@ -249,7 +350,9 @@
   <script src="js/version.js"></script>
   <script src="js/peergos.js"></script>
   <script src="js/text.js"></script>
-  <script src="js/backup.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/files.js"></script>
+  <script src="js/docs.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

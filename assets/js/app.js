@@ -1,26 +1,16 @@
-/* PeergosEasyEdit - the editor.
- *
- * Rules that keep the user's text safe (each one answers a way text was lost before 1.1.0):
- *  - "Saved" is shown only after Peergos accepted the write AND the file read back has exactly
- *    the bytes that were sent. Every failure stays on screen until the text is saved.
- *  - The editor's text is never replaced by what Peergos sends back after a save.
- *  - A file that could not be read is never shown as empty and cannot be saved over.
- *  - Data files (notes, settings) are treated as empty only on 404, never after another error.
- *  - The text is kept in this browser while it is not saved (backup.js) and offered back later.
- */
+/* PeergosEasyEdit - the application: tabs, menus, settings, recent files, the start panel and notes.
+ * Documents (loading, saving, drafts) are in docs.js, locations and the file dialog in files.js, what is kept in
+ * Peergos in store.js. Nothing is stored on the device: settings, the open tabs, recent files, notes and drafts
+ * live in the app's own Peergos folder, so every device shows the same. */
 'use strict';
 
-const SAVE_TIMEOUT_MS = window.PEE_SAVE_TIMEOUT_MS || 120000;  // tests shorten these
-const SLOW_SAVE_MS = window.PEE_SLOW_SAVE_MS || 15000;
-const AUTO_MAX_WAIT_MS = window.PEE_AUTO_MAX_WAIT_MS || 30000;   // autosave at least this often while typing
-const AUTO_RETRY_MS = window.PEE_AUTO_RETRY_MS || 30000;         // pause after a failed autosave
-const AUTOSAVE_CHOICES = [0, 2, 5, 10, 30];                      // seconds after the last change; 0 = off
+const AUTOSAVE_CHOICES = [0, 2, 5, 10, 30];   // seconds after the last change; 0 = off
+const RECENT_CHOICES = [0, 5, 10, 20];
 const $ = id => document.getElementById(id);
-const editor = $('editor');
 
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
-                          fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace", localBackup: true,
-                          autoSave: 5, lineNumbers: false, showNotes: false};
+                          fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace",
+                          autoSave: 5, lineNumbers: false, showNotes: false, tabs: false, recent: 10, drafts: true};
 const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
                 'blue', 'high-contrast'];
 
@@ -34,28 +24,6 @@ function el(tag, props, ...children) {
   return e;
 }
 
-const banners = new Map();
-
-// A message that stays until it is dismissed, replaced or its cause is gone.
-function showBanner(id, level, text, actions = []) {
-  hideBanner(id);
-  const box = el('div', {className: 'banner ' + level});
-  box.dataset.id = id;
-  box.append(el('p', {textContent: text}));
-  for (const [label, fn] of actions)
-    box.append(el('button', {type: 'button', textContent: label, onclick: fn}));
-  $('banners').append(box);
-  banners.set(id, box);
-}
-
-function hideBanner(id) {
-  const box = banners.get(id);
-  if (box) {
-    box.remove();
-    banners.delete(id);
-  }
-}
-
 let toastTimer = null;
 function toast(text, level = '') {
   const t = $('toast');
@@ -63,7 +31,7 @@ function toast(text, level = '') {
   t.className = 'toast ' + level;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, level === 'error' ? 9000 : 3000);
+  toastTimer = setTimeout(() => { t.hidden = true; }, level === 'error' ? 9000 : 3500);
 }
 
 function confirmAction(text, okLabel = 'OK') {
@@ -73,6 +41,29 @@ function confirmAction(text, okLabel = 'OK') {
   d.returnValue = '';
   d.showModal();
   return new Promise(resolve => d.addEventListener('close', () => resolve(d.returnValue === 'ok'), {once: true}));
+}
+
+// Three answers: resolves to 'save', 'discard' or null (cancel).
+function askSaveChanges(name) {
+  const d = $('choiceDialog');
+  $('choiceText').textContent = '"' + name + '" has changes that are not saved. Save them?';
+  d.returnValue = '';
+  d.showModal();
+  return new Promise(resolve => d.addEventListener('close', () =>
+    resolve(d.returnValue === 'save' || d.returnValue === 'discard' ? d.returnValue : null), {once: true}));
+}
+
+// A line of text; resolves to it, or null when cancelled.
+function askText(label, value, okLabel = 'OK') {
+  const d = $('promptDialog');
+  $('promptLabel').textContent = label;
+  $('promptInput').value = value || '';
+  $('promptOk').textContent = okLabel;
+  d.returnValue = '';
+  d.showModal();
+  $('promptInput').focus();
+  return new Promise(resolve => d.addEventListener('close', () =>
+    resolve(d.returnValue === 'ok' ? $('promptInput').value : null), {once: true}));
 }
 
 const timeText = t => new Date(t).toLocaleString([], {dateStyle: 'short', timeStyle: 'short'});
@@ -86,6 +77,8 @@ function describeError(e) {
     if (e.status === 400)
       return 'Peergos refused it (HTTP 400). This happens when the file is read-only for you, when a conflict ' +
              'dialog was cancelled, or when the file name is not passed on correctly.';
+    if (e.status === 403)
+      return 'Peergos allows reading this folder, not changing it (HTTP 403).';
     return e.message + '.';
   }
   if (e instanceof TypeError)
@@ -93,351 +86,409 @@ function describeError(e) {
   return (e && e.message ? e.message : String(e)) + '.';
 }
 
-/* ---------- the document ---------- */
+/* ---------- the application state ---------- */
 
-const doc = {
-  path: null,          // the file in Peergos, or null when started without a file
-  key: 'untitled',     // key of the local backup
-  name: 'untitled.txt',
-  loaded: false,       // the text is the file's (or a new text): editing allowed
-  canSave: false,      // Save may write to path
-  bom: false, eol: '\n',
-  savedText: '',       // the text known to be in the file
-  savedHash: null,
-  savedAt: null,
-  checked: false,      // the last save was read back and matched
-  saving: false,
-  saveAgain: false,
-  restoreOpen: false,  // waiting for the user to decide about a kept copy
+let settings = Object.assign({}, DEFAULT_SETTINGS);
+const docs = [];
+let active = null;
+const appBanners = new Map();   // messages that belong to no document
+
+const App = {
+  get settings() { return settings; },
+  changed(doc) {
+    if (doc === active)
+      refreshState();
+    renderTabs();
+  },
+  renderBanners,
+  close: doc => closeDoc(doc),
+  moved(doc, oldKey) {
+    noteRecent(doc);
+    saveSession();
+    refreshState();
+    renderTabs();
+  },
 };
 
-const isDirty = () => doc.loaded && editor.value !== doc.savedText;
+function showAppBanner(id, level, text, actions = []) {
+  appBanners.set(id, {level, text, actions});
+  renderBanners();
+}
+
+function hideAppBanner(id) {
+  if (appBanners.delete(id))
+    renderBanners();
+}
+
+function renderBanners() {
+  const box = $('banners');
+  box.replaceChildren();
+  const all = [...appBanners.values(), ...(active ? active.banners.values() : [])];
+  for (const b of all) {
+    const row = el('div', {className: 'banner ' + b.level}, el('p', {textContent: b.text}));
+    for (const [label, fn] of b.actions)
+      row.append(el('button', {type: 'button', textContent: label, onclick: fn}));
+    box.append(row);
+  }
+}
 
 function refreshState() {
-  const dirty = isDirty();
-  $('docName').classList.toggle('dirty', dirty);
-  $('saveBtn').disabled = !doc.loaded || doc.restoreOpen || (doc.canSave ? !dirty && !doc.saving : false);
-  $('saveAsBtn').disabled = !doc.loaded || doc.restoreOpen || doc.saving;
-  editor.readOnly = !doc.loaded || doc.restoreOpen || doc.readOnly === true;
+  const doc = active;
+  $('startPanel').hidden = !!doc;
+  $('saveBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.conflict ||
+                          (doc.canSave && doc.loc.kind !== 'new' ? !doc.dirty && !doc.saving : false);
+  $('saveMenuItem').disabled = $('saveBtn').disabled;
+  $('saveAsBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.saving;
+  $('closeMenuItem').disabled = !doc;
+  const name = $('docName');
+  name.textContent = doc ? doc.name : 'PeergosEasyEdit';
+  name.title = doc ? Loc.folder(doc.lasting || doc.loc) : '';
+  name.classList.toggle('dirty', !!doc && doc.dirty);
+  if (doc) {
+    doc.area.readOnly = !doc.loaded || doc.restoreOpen || doc.readOnly === true;
+    for (const d of docs) {
+      d.area.hidden = d !== doc;
+      if (d === doc) d.area.id = 'editor'; else d.area.removeAttribute('id');
+    }
+  }
   const s = $('status');
-  if (doc.saving) {
+  if (!doc) {
+    s.className = 'status';
+    s.textContent = '';
+  } else if (doc.saving) {
     s.className = 'status busy';
     s.textContent = doc.slow ? 'Saving… Peergos has not answered yet' : 'Saving…';
+  } else if (doc.state === 'loading') {
+    s.className = 'status busy';
+    s.textContent = 'Opening…';
   } else if (!doc.loaded) {
-    // loadFile() shows how opening went
-  } else if (dirty) {
+    s.className = 'status error';
+    s.textContent = doc.state === 'missing' ? 'Not found' : 'Not opened';
+  } else if (doc.conflict) {
     s.className = 'status warn';
-    s.textContent = 'Unsaved changes';
+    s.textContent = 'Not saved – see above';
+  } else if (doc.dirty) {
+    s.className = 'status warn';
+    s.textContent = doc.loc.kind === 'new' ? 'Not saved yet' : 'Unsaved changes';
   } else if (doc.savedAt) {
     s.className = doc.checked ? 'status ok' : 'status warn';
     s.textContent = (doc.checked ? 'Saved ✓ ' : 'Saved (not checked) ') +
                     doc.savedAt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
   } else {
     s.className = 'status';
-    s.textContent = doc.path && doc.canSave ? 'No changes' : '';
+    s.textContent = doc.readOnly ? 'Read only' : doc.canSave && doc.loc.kind !== 'new' ? 'No changes' : '';
   }
-  document.title = (dirty ? '● ' : '') + doc.name + ' – PeergosEasyEdit';
+  document.title = (doc ? (doc.dirty ? '● ' : '') + doc.name + ' – ' : '') + 'PeergosEasyEdit';
+  renderBanners();
 }
 
-function setDocName() {
-  $('docName').textContent = doc.name;
-  $('docName').title = doc.path || 'Not saved in Peergos yet';
+/* ---------- tabs and documents ---------- */
+
+function renderTabs() {
+  const bar = $('tabs');
+  bar.hidden = !settings.tabs || docs.length === 0;
+  if (bar.hidden)
+    return;
+  bar.replaceChildren(...docs.map(d => {
+    const tab = el('div', {className: 'tab' + (d === active ? ' active' : '') + (d.dirty ? ' dirty' : ''), title: Loc.folder(d.lasting || d.loc)},
+      el('button', {type: 'button', className: 'tab-name', textContent: d.name, onclick: () => activate(d)}),
+      el('button', {type: 'button', className: 'tab-close', textContent: '×', title: 'Close', onclick: () => closeDoc(d)}));
+    tab.addEventListener('auxclick', e => { if (e.button === 1) closeDoc(d); });
+    return tab;
+  }), el('button', {type: 'button', className: 'tab-new', textContent: '+', title: 'New text', onclick: () => newDoc()}));
 }
 
-async function openDocument() {
-  const {path, trusted} = Peergos.filePathFromAddress(location.search);
-  if (!Peergos.inPeergos) {
-    doc.name = 'PeergosEasyEdit';
-    setDocName();
-    showBanner('load', 'info', 'This page runs outside Peergos, so there is no file to open or save. ' +
-               'Open a text file from your Peergos Drive with PeergosEasyEdit.');
-    refreshState();
-    return;
-  }
-  if (!path) {
-    doc.loaded = true;
-    setDocName();
-    await checkBackup(null);
-    refreshState();
-    editor.focus();
-    return;
-  }
-  doc.path = path;
-  doc.key = path;
-  doc.name = path.substring(path.lastIndexOf('/') + 1) || path;
-  setDocName();
-  if (!trusted) {
-    showBanner('load', 'error', 'Peergos passed this file\'s name to the editor changed (names with + & # or % ' +
-               'are not passed on correctly), so the editor cannot read or save this file safely and does not ' +
-               'open it. Rename the file in your Drive without those characters and open it again.');
-    refreshState();
-    return;
-  }
-  await loadFile();
-}
-
-async function loadFile() {
-  hideBanner('load');
-  const s = $('status');
-  s.className = 'status busy';
-  s.textContent = 'Opening…';
-  let bytes;
-  try {
-    bytes = await Peergos.readFile(doc.path);
-  } catch (e) {
-    const missing = e instanceof Peergos.HttpError && e.status === 404;
-    showBanner('load', 'error', missing
-      ? 'The file was not found. It may have been moved, renamed or deleted. Nothing is saved from this window.'
-      : 'The file could not be opened: ' + describeError(e) + ' Nothing is saved from this window until it ' +
-        'has been opened.', missing ? [] : [['Try again', loadFile]]);
-    s.className = 'status error';
-    s.textContent = 'Not opened';
-    refreshState();
-    return;
-  }
-  const decoded = TextCodec.decode(bytes);
-  editor.value = decoded.text;
-  LineNumbers.later();
-  if (!decoded.ok) {
-    doc.loaded = true;
-    doc.canSave = false;
-    doc.readOnly = true;
-    doc.savedText = decoded.text;
-    showBanner('load', 'warn', 'This file is not UTF-8 text. It is shown read-only, because saving it would ' +
-               'change characters the editor cannot show. "Save as…" saves a UTF-8 copy of what you see.');
-    refreshState();
-    return;
-  }
-  doc.bom = decoded.bom;
-  doc.eol = decoded.eol;
-  doc.savedText = decoded.text;
-  doc.savedHash = await TextCodec.sha256(bytes);
-  doc.loaded = true;
-  doc.canSave = true;
-  if (decoded.mixedEol)
-    showBanner('eol', 'info', 'This file mixes line ending styles. Saving writes them all as ' +
-               (doc.eol === '\r\n' ? 'Windows (CR LF)' : 'Unix (LF)') + ' line endings.', [['OK', () => hideBanner('eol')]]);
-  await checkBackup(doc.savedHash);
+function activate(doc) {
+  active = doc;
   refreshState();
-  editor.focus();
+  renderTabs();
+  LineNumbers.refresh();
+  if (doc && doc.loaded && !doc.area.readOnly)
+    doc.area.focus();
+  saveSession();
 }
 
-/* ---------- local backup in this browser ---------- */
-
-let backupTimer = null;
-let backupWarned = false;
-
-async function checkBackup(fileHash) {
-  if (!settings.localBackup)
-    return;
-  let rec = null;
-  try {
-    await Backup.prune();
-    rec = await Backup.get(doc.key);
-  } catch (e) {
-    warnNoBackup(e);
-    return;
-  }
-  if (!rec)
-    return;
-  if (rec.state === 'unsaved' && rec.text !== doc.savedText && rec.text !== '') {
-    askRestore(rec, 'Changes you made on ' + timeText(rec.at) + ' were not saved to the file. The editor kept them ' +
-               'in this browser.', 'Restore them', 'Discard them');
-  } else if (rec.state === 'saved' && fileHash && rec.savedHash && rec.savedHash !== fileHash && rec.text !== doc.savedText) {
-    askRestore(rec, 'This file is not what you saved here on ' + timeText(rec.at) + '. If it was changed on ' +
-               'another device or in another app, that is expected.', 'Show my saved version', 'Keep the file as it is');
-  }
+function addDoc(doc) {
+  docs.push(doc);
+  $('editorArea').insertBefore(doc.area, $('measure'));
+  doc.area.addEventListener('input', () => {
+    Docs.edited(doc);
+    if (doc === active && settings.lineNumbers)
+      LineNumbers.later();
+  });
+  doc.area.addEventListener('scroll', () => { if (doc === active) LineNumbers.follow(); });
+  applyLook(doc.area);
+  return doc;
 }
 
-// The editor stays read-only until the user decides, so the kept copy cannot be overwritten meanwhile.
-function askRestore(rec, text, restoreLabel, keepLabel) {
-  doc.restoreOpen = true;
-  showBanner('restore', 'warn', text, [
-    [restoreLabel, () => {
-      const fileText = editor.value;
-      doc.restoreOpen = false;
-      editor.value = rec.text;
-      onEdit();
-      showBanner('restore', 'info', 'The kept text is in the editor. ' + (settings.autoSave
-        ? 'Autosave puts it in the file.' : 'Press Save to put it in the file.'), [
-        ['Undo', () => { editor.value = fileText; onEdit(); hideBanner('restore'); }],
-        ['OK', () => hideBanner('restore')]]);
-      refreshState();
-    }],
-    [keepLabel, () => {
-      doc.restoreOpen = false;
-      hideBanner('restore');
-      storeBackupNow();
-      refreshState();
-    }]]);
-  refreshState();
+function removeDoc(doc) {
+  clearTimeout(doc.autoTimer);
+  clearTimeout(doc.draftTimer);
+  doc.area.remove();
+  docs.splice(docs.indexOf(doc), 1);
+  if (active === doc)
+    active = docs[docs.length - 1] || null;
+  activate(active);
+  if (!active)
+    renderStart();
 }
 
-function warnNoBackup(e) {
-  if (backupWarned)
-    return;
-  backupWarned = true;
-  toast('The copy in this browser is not available (' + (e && e.message || e) + '). Save often.', 'error');
+// Without tabs one document at a time: a new one replaces it, after asking about unsaved changes.
+async function makeRoomFor() {
+  if (settings.tabs)
+    return true;
+  for (const d of docs.slice())
+    if (!await closeDoc(d))
+      return false;
+  return true;
 }
 
-function scheduleBackup() {
-  clearTimeout(backupTimer);
-  backupTimer = setTimeout(storeBackupNow, 400);
-}
-
-function storeBackupNow() {
-  clearTimeout(backupTimer);
-  if (!settings.localBackup || !doc.loaded || doc.restoreOpen || doc.readOnly)
-    return;
-  const record = isDirty()
-    ? {key: doc.key, state: 'unsaved', text: editor.value, savedHash: doc.savedHash}
-    : {key: doc.key, state: 'saved', text: doc.savedText, savedHash: doc.savedHash};
-  if (!doc.path && !isDirty()) {
-    // a text started without a file: once saved (or empty) there is nothing to offer back
-    Backup.remove(doc.key).catch(warnNoBackup);
-    return;
-  }
-  Backup.put(record).catch(warnNoBackup);
-}
-
-function onEdit() {
-  refreshState();
-  if (settings.lineNumbers)
-    LineNumbers.later();
-  scheduleBackup();
-  scheduleAutoSave();
-}
-
-/* ---------- autosave ---------- */
-
-let autoTimer = null;
-let autoDirtySince = null;   // when the first change not yet autosaved was made
-let autoFailed = false;      // the last autosave failed: wait AUTO_RETRY_MS before the next one
-
-// Saves settings.autoSave seconds after the last change, and at least every AUTO_MAX_WAIT_MS while
-// typing goes on. Only a file opened from the Drive: a new text would open Peergos' name dialog.
-function scheduleAutoSave() {
-  clearTimeout(autoTimer);
-  if (!settings.autoSave || !doc.canSave || !doc.loaded || doc.restoreOpen || !isDirty()) {
-    autoDirtySince = null;
-    return;
-  }
-  const now = Date.now();
-  if (autoDirtySince === null)
-    autoDirtySince = now;
-  const delay = autoFailed ? AUTO_RETRY_MS
-    : Math.min(settings.autoSave * 1000, Math.max(0, autoDirtySince + AUTO_MAX_WAIT_MS - now));
-  autoTimer = setTimeout(autoSaveNow, delay);
-}
-
-function autoSaveNow() {
-  clearTimeout(autoTimer);
-  if (settings.autoSave && doc.canSave && doc.loaded && !doc.restoreOpen && isDirty())
-    save({auto: true});
-}
-
-/* ---------- saving ---------- */
-
-async function save(options) {
-  const auto = !!(options && options.auto === true);
-  if (!doc.loaded || doc.restoreOpen)
-    return;
-  if (!doc.canSave)
-    return saveAs();
-  if (doc.saving) {
-    doc.saveAgain = true;
-    return;
-  }
-  clearTimeout(autoTimer);
-  autoDirtySince = null;
-  const text = editor.value;
-  const bytes = TextCodec.encode(text, doc);
-  doc.saving = true;
-  doc.slow = false;
-  refreshState();
-  const slowTimer = setTimeout(() => { doc.slow = true; refreshState(); }, SLOW_SAVE_MS);
-  try {
-    await Peergos.writeFile(doc.path, bytes, SAVE_TIMEOUT_MS);
-    let back = null;
-    try {
-      back = await Peergos.readFile(doc.path);
-    } catch (e) {
-      back = null;  // saved, but the check could not be made
-    }
-    if (back && !TextCodec.sameBytes(back, bytes))
-      throw new Error('Peergos reported the file as saved, but reading it back gave different content');
-    doc.savedText = text;
-    doc.savedHash = await TextCodec.sha256(bytes);
-    doc.savedAt = new Date();
-    doc.checked = back !== null;
-    autoFailed = false;
-    hideBanner('save');
-    if (!doc.checked)
-      showBanner('save', 'warn', 'Peergos reported the file as saved, but it could not be read back to check. ' +
-                 'Your text is still here.', [['Save again', save], ['OK', () => hideBanner('save')]]);
-  } catch (e) {
-    autoFailed = true;
-    showBanner('save', 'error', (auto ? 'Autosave failed. ' : '') + 'Not saved: ' + describeError(e) +
-               (settings.autoSave ? ' Autosave tries again in ' + Math.round(AUTO_RETRY_MS / 1000) + ' s.' : '') +
-               ' Your text is still here' +
-               (settings.localBackup && Backup.isAvailable() ? ' and kept in this browser' : '') + '.',
-               [['Try again', save], ['Save as…', saveAs]]);
-  } finally {
-    clearTimeout(slowTimer);
-    doc.saving = false;
-    storeBackupNow();
-    refreshState();
-  }
-  if (doc.saveAgain) {
-    doc.saveAgain = false;
-    if (isDirty())
-      save();
-  } else {
-    scheduleAutoSave();   // changes made while saving, or the retry after a failure
-  }
-}
-
-// The name Peergos' save dialog starts with. Peergos refuses the opened file's own name there.
-function copyName() {
-  if (!doc.path)
-    return doc.name;
-  const dot = doc.name.lastIndexOf('.');
-  return dot > 0 ? doc.name.substring(0, dot) + ' (copy)' + doc.name.substring(dot) : doc.name + ' (copy)';
-}
-
-async function saveAs() {
-  if (!doc.loaded || doc.saving || doc.restoreOpen)
-    return;
-  const text = editor.value;
-  doc.saving = true;
-  refreshState();
-  $('status').textContent = 'Saving a copy… (Peergos asks for the name)';
-  try {
-    await Peergos.saveAs(copyName(), TextCodec.encode(text, doc), 15 * 60 * 1000);
-    hideBanner('save');
-    if (!doc.path) {
-      doc.savedText = text;
-      doc.savedAt = new Date();
-      doc.checked = false;
-      toast('Saved. Peergos reported the file as written.');
+async function closeDoc(doc) {
+  if (doc.dirty && !doc.readOnly) {
+    const answer = await askSaveChanges(doc.name);
+    if (answer === null)
+      return false;
+    if (answer === 'save') {
+      await Docs.save(doc);
+      if (doc.dirty)   // not saved (failed, cancelled or waiting for a decision): keep the tab
+        return false;
     } else {
-      toast('A copy was saved. This window still edits ' + doc.name + '.');
+      await Docs.dropDraft(doc);
     }
-  } catch (e) {
-    if (e instanceof Peergos.HttpError && e.status === 400)
-      toast('Not saved: cancelled, or Peergos refused the name.', 'error');
-    else
-      showBanner('save', 'error', 'The copy was not saved: ' + describeError(e), [['Try again', saveAs]]);
-  } finally {
-    doc.saving = false;
-    storeBackupNow();
-    refreshState();
   }
+  removeDoc(doc);
+  saveSession();
+  return true;
+}
+
+async function newDoc() {
+  if (!await makeRoomFor())
+    return;
+  const names = new Set(docs.map(d => d.name));
+  let n = 1, name = 'untitled.txt';
+  while (names.has(name))
+    name = 'untitled ' + (++n) + '.txt';
+  const doc = addDoc(new Doc(Loc.newDoc(name)));
+  await Docs.load(doc);
+  activate(doc);
+}
+
+// Opens a location (or shows it when it is open already). Resolves to the document.
+async function openLoc(loc, options = {}) {
+  const open = docs.find(d => Loc.same(d.loc, loc) || (d.lasting && Loc.same(d.lasting, loc)));
+  if (open) {
+    activate(open);
+    return open;
+  }
+  if (!options.keepOthers && !await makeRoomFor())
+    return null;
+  const doc = addDoc(new Doc(loc));
+  if (options.draftText !== undefined) {
+    doc.area.value = options.draftText;
+    doc.draftStored = true;
+  }
+  activate(doc);
+  await Docs.load(doc);
+  if (doc.loaded)
+    noteRecent(doc);
+  else if (doc.state === 'missing')
+    markRecentMissing(loc);
+  saveSession();
+  LineNumbers.refresh();
+  return doc;
+}
+
+async function openDialog() {
+  if (!Files.supported())
+    return openWithPicker();
+  const loc = await Files.show('open', '', active && (active.lasting || active.loc));
+  if (!loc)
+    return;
+  if (loc.picker)
+    return openWithPicker();
+  await openLoc(loc);
+}
+
+// Peergos' own file picker: any file in the drive, for this session only.
+async function openWithPicker() {
+  let answer;
+  try {
+    answer = await Peergos.pickFile();
+  } catch (e) {
+    toast('The file picker could not be opened: ' + describeError(e), 'error');
+    return;
+  }
+  if (!answer.length)
+    return;
+  const [path, writable] = answer;
+  if (!Peergos.sendablePath(path)) {
+    toast('Peergos cannot pass this file name to apps unchanged (it holds # or ?). Open it from a granted folder.', 'error');
+    return;
+  }
+  await openLoc({kind: 'picked', path, writable: writable === true});
+}
+
+/* ---------- recent files ---------- */
+
+let recent = [];        // [{key, loc, name, folder, at, missing}]
+
+async function loadRecent() {
+  try {
+    const list = await Store.readJSON('recent.json');
+    recent = Array.isArray(list) ? list.filter(r => r && Loc.valid(r.loc)) : [];
+  } catch (e) {
+    recent = [];
+    toast('Recent files could not be read from Peergos: ' + describeError(e), 'error');
+  }
+}
+
+function saveRecent() {
+  Store.writeJSON('recent.json', recent).catch(e => toast('Recent files not saved in Peergos: ' + describeError(e), 'error'));
+}
+
+function noteRecent(doc) {
+  if (!settings.recent || doc.loc.kind === 'new')
+    return;
+  const loc = doc.lasting || doc.loc;
+  const key = Loc.key(loc);
+  const folder = Loc.folder(loc);
+  recent = [{key, loc: Loc.plain(loc), name: doc.name, folder, at: Date.now()},
+            ...recent.filter(r => r.key !== key && r.key !== Loc.key(doc.loc) && !(r.folder === folder && r.name === doc.name))]
+    .slice(0, settings.recent);
+  saveRecent();
+}
+
+function markRecentMissing(loc) {
+  const r = recent.find(x => x.key === Loc.key(loc) || (x.folder === Loc.folder(loc) && x.name === Loc.name(loc)));
+  if (r && !r.missing) {
+    r.missing = true;
+    saveRecent();
+  }
+}
+
+function forgetRecent(key) {
+  recent = recent.filter(r => r.key !== key);
+  saveRecent();
+  renderRecent();
+}
+
+function recentItems(onPick) {
+  if (!settings.recent || !recent.length)
+    return [el('p', {className: 'recent-empty', textContent: settings.recent ? 'No recent files yet.' : 'Recent files are switched off (Options).'})];
+  return recent.slice(0, settings.recent).map(r => {
+    // opened from the Drive earlier: reachable again once its folder is granted
+    const loc = Loc.lasting(r.loc) ? r.loc : Files.inGrant(r.loc.path);
+    const reachable = !!loc;
+    const row = el('div', {className: 'recent-row' + (r.missing ? ' missing' : '')},
+      el('button', {type: 'button', className: 'recent-open', disabled: !reachable,
+                    title: reachable ? r.folder : 'Opened from the Drive in an earlier session: open it from the Drive again, ' +
+                                                  'or add its folder (File → Open… → Add folders…)',
+                    onclick: () => { onPick && onPick(); openLoc(loc); }},
+        el('span', {className: 'recent-name', textContent: r.name}),
+        el('span', {className: 'recent-folder', textContent: r.missing ? 'not found – ' + r.folder : r.folder})),
+      el('button', {type: 'button', className: 'recent-forget', textContent: '×', title: 'Remove from the list',
+                    onclick: e => { e.stopPropagation(); forgetRecent(r.key); }}));
+    return row;
+  });
+}
+
+function renderRecent() {
+  $('recentMenu').replaceChildren(...recentItems(() => closeMenus()));
+  $('startRecent').replaceChildren(...recentItems());
+}
+
+/* ---------- the start panel (nothing open) ---------- */
+
+async function renderStart() {
+  renderRecent();
+  const box = $('startDrafts');
+  box.replaceChildren();
+  if (!settings.drafts)
+    return;
+  let drafts = [];
+  try {
+    drafts = await Store.listDrafts();
+  } catch (e) {
+    return;
+  }
+  const openKeys = new Set(docs.flatMap(d => [d.key, d.lasting ? Loc.key(d.lasting) : '']));
+  drafts = drafts.filter(d => !openKeys.has(d.key) && Loc.valid(d.loc));
+  if (!drafts.length)
+    return;
+  box.append(el('h3', {textContent: 'Unsaved texts kept in Peergos'}),
+    ...drafts.map(d => el('div', {className: 'recent-row'},
+      el('button', {type: 'button', className: 'recent-open', disabled: !Loc.lasting(d.loc),
+                    title: Loc.lasting(d.loc) ? '' : 'Open the file from the Drive: the draft is offered there',
+                    onclick: () => d.loc.kind === 'new' ? openLoc(d.loc, {draftText: d.text}) : openLoc(d.loc)},
+        el('span', {className: 'recent-name', textContent: d.name}),
+        el('span', {className: 'recent-folder', textContent: timeText(d.at) + ' – ' + Loc.folder(d.loc)})),
+      el('button', {type: 'button', className: 'recent-forget', textContent: '×', title: 'Delete this draft',
+                    onclick: async () => {
+                      if (await confirmAction('Delete the unsaved text "' + d.name + '" from ' + timeText(d.at) + '?', 'Delete')) {
+                        await Store.deleteDraft(d.key).catch(e => toast(describeError(e), 'error'));
+                        renderStart();
+                      }
+                    }}))));
+}
+
+/* ---------- the open tabs, kept in Peergos ---------- */
+
+let sessionTimer = null;
+let sessionReady = false;   // not written before the last session was read
+
+function saveSession() {
+  if (!sessionReady || !Peergos.inPeergos)
+    return;
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(() => {
+    // a new text is listed even while empty: it comes back only if it has a draft by then
+    const tabs = docs.map(d => ({loc: Loc.plain(d.lasting || d.loc), name: d.name}));
+    Store.writeJSON('session.json', {tabs, active: active ? Loc.key(active.lasting || active.loc) : null})
+      .catch(e => toast('Open tabs not saved in Peergos: ' + describeError(e), 'error'));
+  }, 800);
+}
+
+// With tabs on, the tabs left open last time come back - on any device. A new text comes back from its draft.
+async function restoreSession() {
+  let session = null;
+  try {
+    session = await Store.readJSON('session.json');
+  } catch (e) {
+    toast('The tabs open last time could not be read from Peergos: ' + describeError(e), 'error');
+  }
+  sessionReady = true;
+  if (!settings.tabs || !session || !Array.isArray(session.tabs))
+    return;
+  const skipped = [];
+  for (const t of session.tabs) {
+    if (!t || !Loc.valid(t.loc))
+      continue;
+    if (!Loc.lasting(t.loc)) {
+      const loc = Files.inGrant(t.loc.path);
+      if (loc)
+        await openLoc(loc, {keepOthers: true});
+      else
+        skipped.push(t.name);
+      continue;
+    }
+    if (t.loc.kind === 'new') {
+      const draft = await Store.getDraft(Loc.key(t.loc)).catch(() => null);
+      if (draft && draft.text)
+        await openLoc(t.loc, {keepOthers: true, draftText: draft.text});
+      continue;
+    }
+    await openLoc(t.loc, {keepOthers: true});
+  }
+  const want = docs.find(d => Loc.key(d.lasting || d.loc) === session.active);
+  if (want)
+    activate(want);
+  if (skipped.length)
+    showAppBanner('skipped', 'info', 'Not reopened (they were opened from the Drive, outside your granted folders): ' +
+                  skipped.join(', ') + '. Open them from the Drive again.', [['OK', () => hideAppBanner('skipped')]]);
 }
 
 /* ---------- settings ---------- */
 
-let settings = Object.assign({}, DEFAULT_SETTINGS);
 let settingsChain = Promise.resolve();
 let settingsTimer = null;
 
@@ -448,30 +499,38 @@ function cleanSettings(s) {
     if (typeof s.wrapLines === 'boolean') out.wrapLines = s.wrapLines;
     if (Number.isFinite(s.fontSize)) out.fontSize = Math.min(48, Math.max(8, Math.round(s.fontSize)));
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
-    if (typeof s.localBackup === 'boolean') out.localBackup = s.localBackup;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
-    if (typeof s.lineNumbers === 'boolean') out.lineNumbers = s.lineNumbers;
-    if (typeof s.showNotes === 'boolean') out.showNotes = s.showNotes;
+    for (const k of ['lineNumbers', 'showNotes', 'tabs', 'drafts'])
+      if (typeof s[k] === 'boolean') out[k] = s[k];
+    if (RECENT_CHOICES.includes(s.recent)) out.recent = s.recent;
   }
   return out;
+}
+
+function applyLook(area) {
+  area.classList.toggle('wrap', settings.wrapLines);
+  area.style.fontSize = settings.fontSize + 'px';
+  area.style.fontFamily = settings.fontFamily;
 }
 
 function applySettings() {
   document.body.className = 'theme-' + settings.theme;
   $('themeSelect').value = settings.theme;
-  editor.classList.toggle('wrap', settings.wrapLines);
   $('wrapCheck').checked = settings.wrapLines;
-  editor.style.fontSize = settings.fontSize + 'px';
   $('fontSizeLabel').textContent = settings.fontSize;
-  editor.style.fontFamily = settings.fontFamily;
   if (![...$('fontSelect').options].some(o => o.value === settings.fontFamily))
     $('fontSelect').append(el('option', {value: settings.fontFamily, textContent: settings.fontFamily}));
   $('fontSelect').value = settings.fontFamily;
-  $('localBackupCheck').checked = settings.localBackup;
   $('autoSaveSelect').value = String(settings.autoSave);
+  $('recentSelect').value = String(settings.recent);
+  $('tabsCheck').checked = settings.tabs;
+  $('draftsCheck').checked = settings.drafts;
   $('lineNumbersCheck').checked = settings.lineNumbers;
   $('notesPanel').hidden = !settings.showNotes;
   $('notesBtn').checked = settings.showNotes;
+  for (const d of docs)
+    applyLook(d.area);
+  renderTabs();
   fitSandboxPage();
   LineNumbers.refresh();
 }
@@ -491,6 +550,30 @@ function fitSandboxPage() {
   }
 }
 
+async function loadSettings() {
+  try {
+    const text = await Peergos.readData('settings.json');
+    if (text !== null)
+      settings = cleanSettings(JSON.parse(text));
+  } catch (e) {
+    toast('Your settings could not be read from Peergos: ' + describeError(e), 'error');
+  }
+  applySettings();
+}
+
+// Settings apply at once and are saved in Peergos shortly after the last change.
+function changeSetting(name, value) {
+  settings[name] = value;
+  settings = cleanSettings(settings);
+  applySettings();
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => {
+    const text = JSON.stringify(settings);
+    settingsChain = settingsChain.then(() => Peergos.writeData('settings.json', text))
+      .catch(e => toast('Settings not saved in Peergos: ' + describeError(e), 'error'));
+  }, 600);
+}
+
 /* ---------- line numbers ---------- */
 
 // One number per line of the file. With wrapping on, a long line takes several rows: its height is
@@ -500,24 +583,25 @@ const LineNumbers = (() => {
 
   function refresh() {
     clearTimeout(timer);
-    const on = settings.lineNumbers;
+    const area = active && active.area;
+    const on = settings.lineNumbers && !!area;
     $('gutter').hidden = !on;
     if (!on) {
       $('gutterLines').replaceChildren();
       return;
     }
-    const lines = editor.value.split('\n');
+    const lines = area.value.split('\n');
     const gutter = $('gutter');
-    gutter.style.fontFamily = editor.style.fontFamily;
-    gutter.style.fontSize = editor.style.fontSize;
+    gutter.style.fontFamily = area.style.fontFamily;
+    gutter.style.fontSize = area.style.fontSize;
     gutter.style.minWidth = (String(lines.length).length + 1.5) + 'ch';
     const rows = document.createDocumentFragment();
     if (settings.wrapLines) {
       const measure = $('measure');
-      measure.style.fontFamily = editor.style.fontFamily;
-      measure.style.fontSize = editor.style.fontSize;
-      measure.style.width = editor.clientWidth + 'px';
-      measure.replaceChildren(...lines.map(l => el('div', {textContent: l || '\u200b'})));
+      measure.style.fontFamily = area.style.fontFamily;
+      measure.style.fontSize = area.style.fontSize;
+      measure.style.width = area.clientWidth + 'px';
+      measure.replaceChildren(...lines.map(l => el('div', {textContent: l || '​'})));
       const heights = [...measure.children].map(d => d.getBoundingClientRect().height);
       measure.replaceChildren();
       lines.forEach((_, i) => rows.append(el('div', {textContent: i + 1, style: 'height:' + heights[i] + 'px'})));
@@ -529,7 +613,8 @@ const LineNumbers = (() => {
   }
 
   function follow() {
-    $('gutterLines').style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
+    if (active)
+      $('gutterLines').style.transform = 'translateY(' + (-active.area.scrollTop) + 'px)';
   }
 
   function later() {
@@ -539,43 +624,6 @@ const LineNumbers = (() => {
 
   return {refresh, later, follow};
 })();
-
-function localSettings() {
-  try {
-    return JSON.parse(localStorage.getItem('peergoseasyedit.settings'));
-  } catch (e) {
-    return null;
-  }
-}
-
-async function loadSettings() {
-  settings = cleanSettings(localSettings());
-  applySettings();
-  try {
-    const text = await Peergos.readData('settings.json');
-    if (text !== null) {
-      settings = cleanSettings(JSON.parse(text));
-      applySettings();
-      try { localStorage.setItem('peergoseasyedit.settings', JSON.stringify(settings)); } catch (e) { /* only a cache */ }
-    }
-  } catch (e) {
-    toast('Your settings could not be read from Peergos: ' + describeError(e), 'error');
-  }
-}
-
-// Settings apply at once and are saved shortly after the last change.
-function changeSetting(name, value) {
-  settings[name] = value;
-  settings = cleanSettings(settings);
-  applySettings();
-  try { localStorage.setItem('peergoseasyedit.settings', JSON.stringify(settings)); } catch (e) { /* only a cache */ }
-  clearTimeout(settingsTimer);
-  settingsTimer = setTimeout(() => {
-    const text = JSON.stringify(settings);
-    settingsChain = settingsChain.then(() => Peergos.writeData('settings.json', text))
-      .catch(e => toast('Settings not saved in Peergos: ' + describeError(e), 'error'));
-  }, 600);
-}
 
 /* ---------- notes ---------- */
 
@@ -756,23 +804,28 @@ async function importData() {
   toast('Imported.');
 }
 
+
 /* ---------- wiring ---------- */
+
+const MENUS = [['fileMenuBtn', 'fileMenu'], ['optionsMenuBtn', 'optionsMenu']];
+
+function closeMenus(except) {
+  for (const [b, m] of MENUS)
+    if (m !== except) {
+      $(m).hidden = true;
+      $(b).setAttribute('aria-expanded', 'false');
+    }
+}
 
 // Drop-down menus: one open at a time; Escape, a click outside or choosing an item closes it.
 function wireMenus() {
-  const menus = [['fileMenuBtn', 'fileMenu'], ['optionsMenuBtn', 'optionsMenu']];
-  const closeAll = except => {
-    for (const [b, m] of menus)
-      if (m !== except) {
-        $(m).hidden = true;
-        $(b).setAttribute('aria-expanded', 'false');
-      }
-  };
-  for (const [b, m] of menus) {
+  for (const [b, m] of MENUS) {
     $(b).onclick = e => {
       e.stopPropagation();
       const open = $(m).hidden;
-      closeAll(m);
+      closeMenus(m);
+      if (open && m === 'fileMenu')
+        renderRecent();
       $(m).hidden = !open;
       $(b).setAttribute('aria-expanded', String(open));
       if (open) {
@@ -781,58 +834,86 @@ function wireMenus() {
       }
     };
     $(m).addEventListener('click', e => {
-      if (e.target.closest('button'))   // an action was chosen; controls (select, tick boxes) keep it open
-        closeAll(null);
+      if (e.target.closest('button') && !e.target.closest('.recent-forget'))   // an action was chosen
+        closeMenus(null);
     });
   }
-  document.addEventListener('click', e => { if (!e.target.closest('.menu')) closeAll(null); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(null); });
+  document.addEventListener('click', e => { if (!e.target.closest('.menu')) closeMenus(null); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenus(null); });
 }
 
 function wire() {
   wireMenus();
-  editor.addEventListener('input', onEdit);
-  editor.addEventListener('scroll', () => LineNumbers.follow());
+  Files.wire();
   window.addEventListener('resize', () => LineNumbers.later());
-  $('saveBtn').onclick = save;
-  $('saveMenuItem').onclick = save;
-  $('saveAsBtn').onclick = saveAs;
+  const saveActive = () => active && Docs.save(active);
+  const saveActiveAs = () => active && Docs.saveAs(active);
+  $('saveBtn').onclick = saveActive;
+  $('saveMenuItem').onclick = saveActive;
+  $('saveAsBtn').onclick = saveActiveAs;
+  $('newMenuItem').onclick = () => newDoc();
+  $('openMenuItem').onclick = () => openDialog();
+  $('closeMenuItem').onclick = () => active && closeDoc(active);
+  $('startNew').onclick = () => newDoc();
+  $('startOpen').onclick = () => openDialog();
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
       e.preventDefault();
-      if (e.shiftKey) saveAs(); else save();
+      if (e.shiftKey) saveActiveAs(); else saveActive();
     }
   });
-  // write the backup at once when the window is hidden or closed, and autosave then
+  // when the window is hidden (another tab, the app closed): autosave, and keep drafts in Peergos at once
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
-      storeBackupNow();
-      autoSaveNow();
-    }
+    if (document.visibilityState === 'hidden')
+      for (const d of docs) {
+        Docs.autoSaveNow(d);
+        Docs.storeDraft(d);
+      }
   });
-  window.addEventListener('pagehide', storeBackupNow);
 
   $('themeSelect').onchange = e => changeSetting('theme', e.target.value);
   $('fontSelect').onchange = e => changeSetting('fontFamily', e.target.value);
   $('wrapCheck').onchange = e => changeSetting('wrapLines', e.target.checked);
   $('lineNumbersCheck').onchange = e => changeSetting('lineNumbers', e.target.checked);
+  $('tabsCheck').onchange = e => { changeSetting('tabs', e.target.checked); saveSession(); };
+  $('recentSelect').onchange = e => {
+    changeSetting('recent', Number(e.target.value));
+    recent = recent.slice(0, settings.recent);
+    saveRecent();
+    renderRecent();
+  };
   $('autoSaveSelect').onchange = e => {
     changeSetting('autoSave', Number(e.target.value));
-    autoFailed = false;
-    scheduleAutoSave();
+    for (const d of docs) {
+      d.autoFailed = false;
+      Docs.scheduleAutoSave(d);
+    }
+  };
+  $('draftsCheck').onchange = e => changeSetting('drafts', e.target.checked);
+  $('deleteDraftsBtn').onclick = async () => {
+    let drafts = [];
+    try {
+      drafts = await Store.listDrafts();
+    } catch (e) {
+      toast(describeError(e), 'error');
+      return;
+    }
+    if (!drafts.length) {
+      toast('There are no drafts.');
+      return;
+    }
+    if (!await confirmAction('Delete all ' + drafts.length + ' unsaved texts kept as drafts in Peergos?', 'Delete'))
+      return;
+    for (const d of drafts)
+      await Store.deleteDraft(d.key).catch(() => {});
+    for (const d of docs)
+      d.draftStored = false;
+    toast('Drafts deleted.');
+    if (!active)
+      renderStart();
   };
   $('fontBiggerBtn').onclick = () => changeSetting('fontSize', settings.fontSize + 2);
   $('fontSmallerBtn').onclick = () => changeSetting('fontSize', settings.fontSize - 2);
-  $('localBackupCheck').onchange = e => {
-    changeSetting('localBackup', e.target.checked);
-    if (e.target.checked) storeBackupNow();
-  };
-  $('clearLocalBtn').onclick = async () => {
-    if (!await confirmAction('Delete every copy of your texts kept in this browser, including changes that were ' +
-                             'never saved?', 'Delete'))
-      return;
-    Backup.clearAll().then(() => toast('Deleted.'), e => toast('Could not delete: ' + e.message, 'error'));
-  };
 
   $('notesBtn').onchange = e => {
     changeSetting('showNotes', e.target.checked);
@@ -845,6 +926,7 @@ function wire() {
   $('notesCopySelected').onclick = () => copyText(notesText(true), 'Selected notes');
   $('notesCopyAll').onclick = () => copyText(notesText(false), 'All notes');
   $('noteCancel').onclick = () => $('noteDialog').close('cancel');
+  $('promptCancel').onclick = () => $('promptDialog').close('cancel');
   $('backupBtn').onclick = () => $('backupDialog').showModal();
   $('helpBtn').onclick = () => $('helpDialog').showModal();
   $('aboutBtn').onclick = () => $('aboutDialog').showModal();
@@ -858,9 +940,35 @@ function wire() {
 
 async function start() {
   wire();
-  refreshState();
   await loadSettings();
-  await openDocument();
+  document.documentElement.classList.remove('loading');
+  if (!Peergos.inPeergos) {
+    showAppBanner('outside', 'info', 'This page runs outside Peergos, so there is no file to open or save. ' +
+                  'Open PeergosEasyEdit from the Peergos Launcher or a text file in your Drive.');
+    sessionReady = true;
+    refreshState();
+    renderStart();
+    await loadNotes();
+    return;
+  }
+  const moved = await Store.moveBrowserCopy().catch(() => 0);
+  if (moved)
+    toast(moved + ' unsaved text(s) kept in this browser by version 1.1.0 moved to drafts in Peergos.');
+  await Files.refreshGrants().catch(() => null);
+  await loadRecent();
+  await restoreSession();
+  const {path, trusted} = Peergos.filePathFromAddress(location.search);
+  if (path && !trusted)
+    showAppBanner('mangled', 'error', 'Peergos passed this file\'s name to the editor changed (names with + & # or % are ' +
+                  'not passed on correctly), so the editor cannot read or save it safely and did not open it. Open it ' +
+                  'with File → Open… from a granted folder (names are passed on correctly there), or rename it.',
+                  [['Open…', () => openDialog()], ['OK', () => hideAppBanner('mangled')]]);
+  else if (path)
+    await openLoc({kind: 'chosen', path}, {keepOthers: true});
+  if (!active)
+    renderStart();
+  refreshState();
+  renderTabs();
   await loadNotes();
 }
 

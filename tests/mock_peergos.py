@@ -11,10 +11,17 @@ Faults (POST /mock/config with JSON, every key optional):
   {"503": n}                  the next n requests answer 503, as after a service worker restart
   {"fail": {"PUT": 400}}      answer this status to every request of that method (file and data)
   {"failData": {"GET": 500}}  the same for the data API only
+  {"failFile": {"PUT": 400}}  the same for files only (not the data API)
   {"hang": ["PUT"]}           never answer requests of these methods
   {"delay": {"PUT": 2.0}}     answer after this many seconds
   {"readBack": "garbage"}     GETs of a file answer different bytes than were written
   {"saveAs": 400}             the save dialog answers this status (as when it is cancelled)
+  {"pickFolders": ["/alice/docs"]}  what the user grants in the next folder picker ([] = cancel)
+  {"pickFile": "/alice/x.txt"}      what the user picks in the next file picker ("" = cancel)
+  {"noGrants": true}          behave like a Peergos without granted folders (404 for /grants/)
+Granted folders (/peergos-api/v0/folder/<id>/<path>) map onto FILES under the grant's path, as in Peergos 1.40:
+GET of a folder lists it ({files:[{name,modified,size}], subFolders:[{name}]} with ?details=true), PUT creates
+folders on the way, POST ?type=directory makes a folder, 403 without write, 404 for a missing file or stale grant.
 POST /mock/reset clears faults; PUT /mock/file?path=... sets a file's bytes; GET /mock/file?path=...
 returns them; GET /mock/log lists the requests seen.
 """
@@ -26,6 +33,10 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets')
 LOCK = threading.Lock()
 FILES = {}       # absolute path -> bytes
 DATA = {}        # data file name -> bytes
+GRANTS = {}      # grant id -> {grantId, path, write, persist, stale}
+FOLDERS = set()  # empty folders made through a grant
+import itertools
+NEXT_ID = itertools.count(1)
 FAULTS = {}
 LOG = []
 TYPES = {'.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json'}
@@ -70,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
                 delay = FAULTS.get('delay', {}).get(method, 0)
                 fail = FAULTS.get('fail', {}).get(method)
                 fail_data = FAULTS.get('failData', {}).get(method)
+                if not path.startswith('/peergos-api/v0/data/'):
+                    fail = fail or FAULTS.get('failFile', {}).get(method)
             if hang:
                 self.body()
                 time.sleep(3600)
@@ -79,6 +92,16 @@ class Handler(BaseHTTPRequestHandler):
             if fail and not path.startswith('/peergos-api/v0/save/'):
                 self.body()
                 return self.send(fail)
+            if path.startswith('/peergos-api/v0/grants/'):
+                return self.grants(path[len('/peergos-api/v0/grants/'):], method)
+            if path.startswith('/peergos-api/v0/folders/'):
+                return self.folders(parse_qs(url.query))
+            if path.startswith('/peergos-api/v0/file-picker/'):
+                with LOCK:
+                    picked = FAULTS.pop('pickFile', '')
+                return self.send(200, json.dumps([picked, True] if picked else ['', False]).encode(), 'application/json')
+            if path.startswith('/peergos-api/v0/folder/'):
+                return self.granted(path[len('/peergos-api/v0/folder/'):], method, parse_qs(url.query))
             if path.startswith('/peergos-api/v0/data/'):
                 if fail_data:
                     self.body()
@@ -116,10 +139,87 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200)
         return self.send(400)
 
+    def grants(self, rest, method):
+        with LOCK:
+            if FAULTS.get('noGrants'):
+                return self.send(404)
+            if method == 'GET' and not rest:
+                out = [{k: v for k, v in g.items() if not (k == 'path' and g['stale'])} for g in GRANTS.values()]
+                return self.send(200, json.dumps(out).encode(), 'application/json')
+            if method == 'DELETE' and rest in GRANTS:
+                del GRANTS[rest]
+                return self.send(204)
+        return self.send(400)
+
+    def folders(self, q):
+        with LOCK:
+            if FAULTS.get('noGrants'):
+                return self.send(404)
+            paths = FAULTS.pop('pickFolders', [])
+            write = q.get('write', ['false'])[0] == 'true'
+            persist = q.get('persist', ['false'])[0] == 'true'
+            added = []
+            for p in paths:
+                if p.count('/') < 2:          # the home folder itself is refused, as in Peergos 1.40
+                    continue
+                gid = 'g%d' % next(NEXT_ID)
+                GRANTS[gid] = {'grantId': gid, 'path': p, 'write': write, 'persist': persist, 'granted': int(time.time() * 1000), 'stale': False}
+                added.append(dict(GRANTS[gid]))
+        return self.send(200, json.dumps(added).encode(), 'application/json')
+
+    def granted(self, rest, method, q):
+        gid, _, rel = rest.partition('/')
+        rel = rel.strip('/')
+        body = self.body() if method in ('PUT', 'POST') else b''
+        with LOCK:
+            g = GRANTS.get(gid)
+            if not g:
+                return self.send(400)
+            if g['stale']:
+                return self.send(404)
+            if method != 'GET' and not g['write']:
+                return self.send(403)
+            full = g['path'] + ('/' + rel if rel else '')
+            if method == 'GET':
+                if full in FILES:
+                    data = FILES[full]
+                    if FAULTS.get('readBack') == 'garbage':
+                        data = data + b'?'
+                    return self.send(200, data, 'text/plain', {'ETag': '"%d"' % hash(data)})
+                prefix = full + '/'
+                kids = [k[len(prefix):] for k in list(FILES) + list(FOLDERS) if k.startswith(prefix)]
+                if not kids and full not in FOLDERS and full != g['path']:
+                    return self.send(404)
+                files = sorted({k for k in kids if '/' not in k and prefix + k in FILES})
+                subs = sorted({k.split('/')[0] for k in kids if '/' in k or prefix + k in FOLDERS})
+                details = q.get('details', ['false'])[0] == 'true'
+                listing = {'files': [{'name': f, 'modified': '2026-10-23T12:00:00.000Z', 'size': len(FILES[prefix + f])} if details else f for f in files],
+                           'subFolders': [{'name': d, 'modified': '2026-10-23T12:00:00.000Z'} if details else d for d in subs]}
+                return self.send(200, json.dumps(listing).encode(), 'text/plain')
+            if method == 'PUT':
+                created = full not in FILES
+                FILES[full] = body
+                return self.send(201 if created else 200)
+            if method == 'POST' and q.get('type', [''])[0] == 'directory':
+                FOLDERS.add(full)
+                return self.send(201)
+            if method == 'DELETE':
+                FILES.pop(full, None)
+                return self.send(204)
+        return self.send(400)
+
     def data(self, name, method):
         with LOCK:
             if method == 'GET':
-                return self.send(200, DATA[name], 'application/json') if name in DATA else self.send(404)
+                if name in DATA:
+                    return self.send(200, DATA[name], 'application/json')
+                kids = sorted(k[len(name) + 1:] for k in DATA if k.startswith(name + '/') and '/' not in k[len(name) + 1:])
+                if kids:
+                    return self.send(200, json.dumps({'files': kids, 'subFolders': []}).encode(), 'text/plain')
+                return self.send(404)
+            if method == 'DELETE':
+                DATA.pop(name, None)
+                return self.send(204)
             if method == 'PUT':
                 created = name not in DATA
                 DATA[name] = self.body()
@@ -136,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
                 FAULTS.clear()
                 FILES.clear()
                 DATA.clear()
+                GRANTS.clear()
+                FOLDERS.clear()
                 LOG.clear()
                 return self.send(200)
             if path == '/mock/file':
@@ -150,6 +252,17 @@ class Handler(BaseHTTPRequestHandler):
                     DATA[n] = self.body()
                     return self.send(200)
                 return self.send(200, DATA[n]) if n in DATA else self.send(404)
+            if path == '/mock/grant':        # a grant the user gave earlier: {"path", "write", "stale"}
+                spec = json.loads(self.body() or b'{}')
+                gid = 'g%d' % next(NEXT_ID)
+                GRANTS[gid] = {'grantId': gid, 'path': spec['path'], 'write': spec.get('write', True), 'persist': True,
+                               'granted': int(time.time() * 1000), 'stale': spec.get('stale', False)}
+                return self.send(200, gid.encode())
+            if path == '/mock/stale':
+                GRANTS[q['id'][0]]['stale'] = True
+                return self.send(200)
+            if path == '/mock/datalist':
+                return self.send(200, json.dumps(sorted(DATA)).encode(), 'application/json')
             if path == '/mock/log':
                 return self.send(200, json.dumps(LOG).encode(), 'application/json')
         return self.send(404)

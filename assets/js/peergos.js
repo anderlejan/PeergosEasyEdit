@@ -9,12 +9,17 @@
  *    Callers get a TimeoutError; a write may still complete after it.
  *  - The file's path reaches the app unencoded in "?path=" (sandbox.js), so names holding
  *    "+", "&", "#" or "%" arrive changed. filePathFromAddress() detects that.
+ * Granted folders (/peergos-api/v0/folder/<grant>/<path>) pass every name correctly: each segment is
+ * percent-encoded here and decoded one by one by the service worker. Their API paths need the trailing
+ * slash (/v0/folders/, /v0/file-picker/, /v0/grants/): without it the request is taken for a file (404).
  */
 'use strict';
 
 const Peergos = (() => {
   const RETRY_503_MS = [250, 500, 1000, 1500, 2500, 4000, 6000];
   const DATA = '/peergos-api/v0/data/';
+  const FOLDER = '/peergos-api/v0/folder/';
+  const USER_WAIT_MS = 30 * 60 * 1000;   // dialogs that wait for the user
 
   class HttpError extends Error {
     constructor(status, what) {
@@ -93,18 +98,95 @@ const Peergos = (() => {
     return encodeURI(path);
   }
 
-  // The chosen file (EDIT_CHOSEN_FILE). Returns the raw bytes; throws HttpError/TimeoutError.
-  async function readFile(path) {
-    const res = await request(fileUrl(path), {method: 'GET'}, 'Reading the file');
+  // A file in a granted folder: grant id + path inside the folder.
+  function grantUrl(grantId, rel) {
+    const parts = String(rel || '').split('/').filter(p => p.length > 0);
+    return FOLDER + encodeURIComponent(grantId) + '/' + parts.map(encodeURIComponent).join('/');
+  }
+
+  // A file's bytes from its url (chosen file, picked file or granted folder); throws HttpError/TimeoutError.
+  async function readUrl(url) {
+    const res = await request(url, {method: 'GET'}, 'Reading the file');
     if (!res.ok)
       throw new HttpError(res.status, 'Reading the file');
     return new Uint8Array(await res.arrayBuffer());
   }
 
-  async function writeFile(path, bytes, timeoutMs) {
-    const res = await request(fileUrl(path), {method: 'PUT', body: bytes}, 'Saving the file', timeoutMs);
+  async function writeUrl(url, bytes, timeoutMs) {
+    const res = await request(url, {method: 'PUT', body: bytes}, 'Saving the file', timeoutMs);
     if (!res.ok)
       throw new HttpError(res.status, 'Saving the file');
+    return res.status;
+  }
+
+  const readFile = path => readUrl(fileUrl(path));
+  const writeFile = (path, bytes, timeoutMs) => writeUrl(fileUrl(path), bytes, timeoutMs);
+
+  // The app's granted folders, or null when this Peergos has none (older versions).
+  async function grants() {
+    if (!inPeergos)
+      return null;
+    const res = await request('/peergos-api/v0/grants/', {method: 'GET'}, 'Reading the granted folders');
+    if (!res.ok)
+      return null;
+    try {
+      const list = JSON.parse(await res.text());
+      return Array.isArray(list) ? list : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Peergos asks the user for folders the app may read and change, and remember. [] when cancelled.
+  async function askForFolders() {
+    const res = await request('/peergos-api/v0/folders/?persist=true&write=true', {method: 'GET'}, 'Choosing folders', USER_WAIT_MS);
+    if (!res.ok)
+      throw new HttpError(res.status, 'Choosing folders');
+    const text = await res.text();
+    return text ? JSON.parse(text) : [];
+  }
+
+  async function revokeGrant(grantId) {
+    const res = await request('/peergos-api/v0/grants/' + encodeURIComponent(grantId), {method: 'DELETE'}, 'Removing the folder');
+    if (!res.ok && res.status !== 404)
+      throw new HttpError(res.status, 'Removing the folder');
+  }
+
+  // {files: [{name, modified, size}], subFolders: [{name, modified}]}, or null when the folder is gone.
+  async function listFolder(grantId, rel) {
+    const res = await request(grantUrl(grantId, rel) + '?details=true', {method: 'GET'}, 'Reading the folder');
+    if (res.status === 404)
+      return null;
+    if (!res.ok)
+      throw new HttpError(res.status, 'Reading the folder');
+    const list = JSON.parse(await res.text());
+    const named = x => typeof x === 'string' ? {name: x} : x;
+    return {files: (list.files || []).map(named), subFolders: (list.subFolders || []).map(named)};
+  }
+
+  async function makeFolder(grantId, rel) {
+    const res = await request(grantUrl(grantId, rel) + '?type=directory', {method: 'POST'}, 'Creating the folder');
+    if (!res.ok)
+      throw new HttpError(res.status, 'Creating the folder');
+  }
+
+  // Peergos' own file picker: [path, writable] (writable for this session only), [] when cancelled.
+  async function pickFile() {
+    const res = await request('/peergos-api/v0/file-picker/?writable=true', {method: 'GET'}, 'Choosing a file', USER_WAIT_MS);
+    if (!res.ok)
+      throw new HttpError(res.status, 'Choosing a file');
+    const answer = JSON.parse(await res.text() || '[]');
+    return Array.isArray(answer) && answer[0] ? answer : [];
+  }
+
+  // Whether a path from the file picker can be sent to Peergos unchanged (see filePathFromAddress).
+  function sendablePath(path) {
+    try {
+      return !path.includes('?') && !path.includes('#') &&
+             decodeURI(new URL(fileUrl(path), location.href).pathname) === path;
+    } catch (e) {
+      return false;
+    }
   }
 
   // Save under a new name: Peergos asks the user for the name and folder (or cancels: 400).
@@ -116,9 +198,12 @@ const Peergos = (() => {
 
   // The app's own data folder (STORE_APP_DATA). null = the file does not exist yet (404).
   // Any other failure throws: the caller must not treat it as "no data".
+  // Outside Peergos (development only) the data lives in memory: nothing is written to this device.
+  const memory = new Map();
+
   async function readData(name) {
     if (!inPeergos)
-      return localStorage.getItem('peergoseasyedit.data.' + name);
+      return memory.has(name) ? memory.get(name) : null;
     const res = await request(DATA + name, {method: 'GET'}, 'Reading ' + name);
     if (res.status === 404)
       return null;
@@ -129,7 +214,7 @@ const Peergos = (() => {
 
   async function writeData(name, text) {
     if (!inPeergos) {
-      localStorage.setItem('peergoseasyedit.data.' + name, text);
+      memory.set(name, text);
       return;
     }
     const res = await request(DATA + name, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: text}, 'Saving ' + name);
@@ -137,8 +222,19 @@ const Peergos = (() => {
       throw new HttpError(res.status, 'Saving ' + name);
   }
 
-  return {inPeergos, params, filePathFromAddress, queryEncode, readFile, writeFile, saveAs, readData, writeData,
-          HttpError, TimeoutError};
+  async function deleteData(name) {
+    if (!inPeergos) {
+      memory.delete(name);
+      return;
+    }
+    const res = await request(DATA + name, {method: 'DELETE'}, 'Deleting ' + name);
+    if (!res.ok && res.status !== 404)
+      throw new HttpError(res.status, 'Deleting ' + name);
+  }
+
+  return {inPeergos, params, filePathFromAddress, queryEncode, fileUrl, grantUrl, sendablePath,
+          readUrl, writeUrl, readFile, writeFile, saveAs, grants, askForFolders, revokeGrant, listFolder, makeFolder,
+          pickFile, readData, writeData, deleteData, HttpError, TimeoutError};
 })();
 
 if (typeof module !== 'undefined')

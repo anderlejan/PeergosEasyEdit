@@ -9,7 +9,8 @@ stored on the server, read with PG.java through the Peergos Java API - not throu
 Server, user, password and jar come from the environment or .env (see .env.example): PEERGOS_URL,
 PEERGOS_TEST_USER, PEERGOS_TEST_PASSWORD, PEERGOS_JAR.
 
-Scenarios: control (open, edit, save), autosave (no Save pressed, also after a worker stop), sw-stop (stop the sandbox service worker - what the browser does when
+Scenarios: v12 (1.2.0: Open through a granted folder, Save as into a new folder, tabs, a draft, reopen from the
+launcher with the tabs back, nothing on the device), control (open, edit, save), autosave (no Save pressed, also after a worker stop), sw-stop (stop the sandbox service worker - what the browser does when
 idle - then save), names (file names with + and &), stale (file changed elsewhere, read again), upgrade
 (version, notes, settings after installing over an older version), pct (a name with % - Peergos cannot open it).
 Setup: see tests/README.md.
@@ -132,6 +133,20 @@ def open_file(page, folder, name):
     return f
 
 
+def launch(page):
+    """Start the app from the Launcher, without a file."""
+    for _ in range(5):
+        if page.evaluate("() => { const c = " + VUE + ".find('launchAppFromUI'); if (c) { window.__launcher = c; return true; } return false; }"):
+            break
+        page.evaluate("() => { const b = [...document.querySelectorAll('button, a')].find(x => ['Launcher', 'Apps'].includes(x.textContent.trim())); if (b) b.click(); }")
+        time.sleep(2)
+    wait(lambda: page.evaluate("n => { const c = window.__launcher; return c && !c.showSpinner && JSON.stringify(c.appsList || []).includes(n); }", APP), 'launcher apps', 120)
+    page.evaluate("n => window.__launcher.launchApp(n)", APP)
+    f = wait(lambda: (lambda fr: fr if fr and fr.evaluate("!!document.getElementById('editorArea') && !document.documentElement.classList.contains('loading')") else None)(app_frame(page)), 'the app to start', 120)
+    time.sleep(4)
+    return f
+
+
 def close_app(page):
     page.evaluate("() => { const c = " + VUE + ".find('closeSandbox'); if (c) c.closeSandbox(); }")
     wait(lambda: page.evaluate("!document.querySelector('#sandboxId')"), 'app to close', 60)
@@ -237,6 +252,47 @@ def main():
                 html: getComputedStyle(document.documentElement).backgroundColor, theme: document.body.className})"""))
             close_app(page)
 
+        if A.scenario == 'grants-probe':   # what granted folders really allow (Peergos 1.40)
+            def grant(paths, write=True, persist=True):
+                f.evaluate("window.__g = fetch('/peergos-api/v0/folders/?persist=true&write=true').then(async r => { const t = await r.text(); return r.status === 200 && t ? JSON.parse(t) : {status: r.status, text: t}; }); 1")
+                time.sleep(3)
+                early = f.evaluate("Promise.race([window.__g, new Promise(r => setTimeout(() => r('still waiting'), 500))])")
+                if early != 'still waiting':
+                    return early
+                wait(lambda: page.evaluate("() => { const c = " + VUE + ".find('addGrants'); return !!(c && c.showFolderPicker); }"), 'grant picker', 30)
+                page.evaluate("([p, w, s]) => " + VUE + ".find('addGrants').selectedFoldersFromPicker(p, {write: w, persist: s})", [paths, write, persist])
+                return f.evaluate("window.__g")
+            f = open_file(page, '/%s/docs' % USER, 'notes.txt')
+            home = grant(['/%s' % USER])
+            print('grant the whole home folder ->', home)
+            docs = grant(['/%s/docs' % USER])
+            print('grant docs ->', docs)
+            ok_home = isinstance(home, list) and len(home) > 0
+            ok_docs = isinstance(docs, list) and len(docs) > 0
+            gid = home[0]['grantId'] if ok_home else (docs[0]['grantId'] if ok_docs else None)
+            home = ok_home
+            if gid:
+                js = """async ([gid, rel, method, body]) => { const enc = rel.split('/').map(encodeURIComponent).join('/');
+                    const r = await fetch('/peergos-api/v0/folder/' + gid + '/' + enc, method === 'GET' ? {} : {method, body});
+                    return {status: r.status, etag: r.headers.get('etag'), type: r.headers.get('content-type'), body: (await r.text()).slice(0, 200)}; }"""
+                base = 'docs/' if home else ''
+                print('list root (details):', f.evaluate(js.replace("'/' + enc", "'/' + enc + '?details=true'"), [gid, base.rstrip('/'), 'GET', None]))
+                for name in ['probe.txt', '100% done.txt', 'hash#1.txt', 'C++ & a;b.txt', 'Příliš žluťoučký.txt', 'sub/inner/new.txt']:
+                    w = f.evaluate(js, [gid, base + name, 'PUT', 'hello ' + name])
+                    r = f.evaluate(js, [gid, base + name, 'GET', None])
+                    print('  %-24s PUT %s -> GET %s %r etag=%s' % (name, w['status'], r['status'], r['body'], r['etag']))
+                print('missing file:', f.evaluate(js, [gid, base + 'nope.txt', 'GET', None]))
+                print('a folder path GET:', f.evaluate(js, [gid, base + 'sub', 'GET', None])['body'][:80])
+            close_app(page)
+            f = open_file(page, '/%s/docs' % USER, 'notes.txt')
+            print('grants after closing and reopening the app:', f.evaluate("fetch('/peergos-api/v0/grants/').then(r => r.json())"))
+            fp = f.evaluate("window.__p = fetch('/peergos-api/v0/file-picker/?writable=true').then(r => r.json()); 1")
+            wait(lambda: page.evaluate("() => { const c = " + VUE + ".find('addGrants'); return !!(c && c.showFilePicker); }"), 'file picker', 30)
+            page.evaluate("p => " + VUE + ".find('addGrants').selectedFileFromPicker(p, true)", '/%s/docs/probe.txt' % USER)
+            print('file picker answer:', f.evaluate("window.__p"))
+            print('write the picked file:', f.evaluate("fetch('/%s/docs/probe.txt', {method: 'PUT', body: 'picked write'}).then(r => r.status)" % USER))
+            close_app(page)
+
         if A.scenario == 'upgrade':
             f = open_file(page, '/%s/docs' % USER, 'notes.txt')
             info = f.evaluate("""() => ({version: VERSION, theme: document.body.className, wrap: document.getElementById('editor').classList.contains('wrap'),
@@ -283,6 +339,84 @@ def main():
                 after = server_text(path)
                 print('  server file now: %r -> %s' % (after, 'SAVED' if after == new_text else 'NOT SAVED'), flush=True)
                 close_app(page)
+
+        if A.scenario == 'v12':
+            os.makedirs(A.shots, exist_ok=True)
+            docs = '/%s/docs' % USER
+            STATE = """() => ({tabs: [...document.querySelectorAll('#tabs .tab-name')].map(b => b.textContent),
+                text: document.getElementById('editor') ? document.getElementById('editor').value : null,
+                status: document.getElementById('status').textContent, start: !document.getElementById('startPanel').hidden,
+                banners: [...document.querySelectorAll('.banner p')].map(b => b.textContent),
+                title: document.title, recent: [...document.querySelectorAll('#recentMenu button, #startRecent button')].map(b => b.textContent)})"""
+            LOCAL = """async () => { const c = {}; for (const k of await caches.keys()) c[k] = (await (await caches.open(k)).keys()).map(r => r.url);
+                return {localStorage: Object.keys(localStorage), indexedDB: (await indexedDB.databases()).map(d => d.name), caches: c,
+                        recent: await fetch('/peergos-api/v0/data/recent.json').then(r => r.text())}; }"""
+
+            def typed(f, t):
+                f.evaluate("t => { const e = document.getElementById('editor'); e.value = t; e.dispatchEvent(new Event('input', {bubbles: true})); }", t)
+
+            def saved(f, name=None):
+                return wait(lambda: (lambda st: st if st['status'].startswith('Saved') and (not name or name in st['title']) else None)(f.evaluate(STATE)), 'saved', 60)
+
+            f = open_file(page, docs, 'notes.txt')
+            st = f.evaluate(STATE)
+            print('1. opened from the Drive:', st, flush=True)
+            if not f.evaluate("document.getElementById('tabsCheck').checked"):
+                f.evaluate("document.getElementById('tabsCheck').click()")
+            typed(f, st['text'] + 'edited in 1.2.0\n')
+            f.evaluate("document.getElementById('saveBtn').click()")
+            print('   saved:', saved(f)['status'], '| server:', repr(server_text(docs + '/notes.txt')), flush=True)
+
+            f.evaluate("document.getElementById('openMenuItem').click()")
+            time.sleep(1.5)
+            print('2. Open dialog before any grant:', f.evaluate("document.getElementById('fdList').textContent")[:120], flush=True)
+            f.evaluate("document.querySelector('.fd-add').click()")
+            wait(lambda: page.evaluate("() => { const c = " + VUE + ".find('addGrants'); return !!(c && c.showFolderPicker); }"), 'Peergos folder picker', 30)
+            page.screenshot(path=os.path.join(A.shots, 'v12-peergos-folder-picker.png'))
+            page.evaluate("p => " + VUE + ".find('addGrants').selectedFoldersFromPicker(p, {write: true, persist: true})", [docs])
+            rows = wait(lambda: (lambda r: r if r else None)(f.evaluate("[...document.querySelectorAll('#fdList .fd-row')].map(r => r.textContent)")), 'granted folder listed', 60)
+            print('   granted docs, listing:', rows, flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'v12-open-dialog.png'))
+            f.evaluate("document.getElementById('fdCancel').click()")
+            time.sleep(1)
+            print('   after the grant the open file is mapped to it, banners:', f.evaluate(STATE)['banners'], flush=True)
+
+            f.evaluate("document.getElementById('saveAsBtn').click()")
+            wait(lambda: f.evaluate("document.getElementById('fileDialog').open && document.querySelectorAll('#fdList .fd-row').length > 0"), 'Save as dialog', 60)
+            f.evaluate("document.getElementById('fdNewFolder').click()")
+            time.sleep(0.5)
+            f.evaluate("""() => { document.getElementById('promptInput').value = 'Sub dir & 100%'; document.getElementById('promptOk').click(); }""")
+            wait(lambda: f.evaluate("document.getElementById('fdCrumbs').textContent.includes('Sub dir & 100%')"), 'new folder entered', 60)
+            f.evaluate("""() => { const n = document.getElementById('fdName'); n.value = 'copy #1.txt'; n.dispatchEvent(new Event('input')); document.getElementById('fdOk').click(); }""")
+            st = saved(f, 'copy #1.txt')
+            target = docs + '/Sub dir & 100%/copy #1.txt'
+            print('3. Save as into a new folder:', st['tabs'], st['title'], '| server:', repr(server_text(target)), flush=True)
+            typed(f, st['text'] + 'second save\n')
+            f.evaluate("document.getElementById('saveBtn').click()")
+            saved(f)
+            print('   Save after Save as goes to the new file:', repr(server_text(target)), '| notes.txt:', repr(server_text(docs + '/notes.txt')), flush=True)
+
+            f.evaluate("document.getElementById('newMenuItem').click()")
+            time.sleep(1)
+            typed(f, 'a new text, never saved\n')
+            time.sleep(6)
+            print('4. new text in a tab:', f.evaluate(STATE)['tabs'], flush=True)
+            print('   drafts folder in Peergos:', f.evaluate("fetch('/peergos-api/v0/data/drafts').then(async r => r.status + ' ' + (await r.text()).slice(0, 200))"), flush=True)
+            print('   session.json:', f.evaluate("fetch('/peergos-api/v0/data/session.json').then(async r => r.status + ' ' + (await r.text()).slice(0, 300))"), flush=True)
+            print('   on the device:', f.evaluate(LOCAL), flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'v12-tabs.png'))
+            close_app(page)
+
+            f = launch(page)
+            st = f.evaluate(STATE)
+            print('5. started from the Launcher again:', st, flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'v12-relaunch.png'))
+            for i in range(len(st['tabs'])):
+                f.evaluate("i => document.querySelectorAll('#tabs .tab-name')[i].click()", i)
+                time.sleep(0.5)
+                print('   tab %d:' % i, f.evaluate(STATE)['text'], flush=True)
+            print('   on the device:', f.evaluate(LOCAL), flush=True)
+            close_app(page)
         browser.close()
 
 

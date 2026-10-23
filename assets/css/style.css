@@ -23,6 +23,7 @@ body.theme-high-contrast { --bg: #000000; --fg: #ffffff; --bar: #000000; --line:
 body.theme-dark, body.theme-green-on-black, body.theme-amber-on-black, body.theme-solarized-dark, body.theme-nord, body.theme-blue,
 body.theme-high-contrast { color-scheme: dark; }
 [hidden] { display: none !important; }
+html.loading body { visibility: hidden; }   /* until the settings (theme) came from Peergos */
 
 html, body { height: 100%; margin: 0; }
 body { display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
@@ -71,9 +72,10 @@ kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
 
 .workspace { flex: 1; display: flex; min-height: 0; }
 .editor-area { flex: 1; display: flex; min-width: 0; position: relative; }
-#editor { flex: 1; min-width: 0; border: 0; outline: 0; resize: none; margin: 0; padding: 8px 10px; box-sizing: border-box;
-          background: var(--bg); color: var(--fg); white-space: pre; overflow: auto; tab-size: 4; line-height: 1.45; }
-#editor.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.doc-text { flex: 1; min-width: 0; border: 0; outline: 0; resize: none; margin: 0; padding: 8px 10px; box-sizing: border-box;
+             background: var(--bg); color: var(--fg); white-space: pre; overflow: auto; tab-size: 4; line-height: 1.45; }
+.doc-text.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.doc-text[readonly] { opacity: .85; }
 .gutter { flex: none; overflow: hidden; padding: 8px 6px 8px 8px; box-sizing: border-box; text-align: right; line-height: 1.45;
           background: var(--bar); color: var(--fg); opacity: .6; border-right: 1px solid var(--line); user-select: none; }
 .gutter div { white-space: nowrap; }
@@ -81,7 +83,6 @@ kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
 .measure { position: absolute; visibility: hidden; left: 0; top: 0; height: auto; padding: 8px 10px; box-sizing: border-box;
            white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; tab-size: 4; pointer-events: none; }
 .measure div { min-height: 1.45em; }
-#editor[readonly] { opacity: .85; }
 
 .notes-panel { width: 340px; max-width: 45vw; display: flex; flex-direction: column; border-left: 1px solid var(--line);
                background: var(--panel); overflow: auto; }
@@ -118,3 +119,64 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .prose h4 { margin: .8em 0 .2em; }
 .prose p, .prose ul { margin: .3em 0; }
 section h3 { margin: .4em 0; }
+
+/* tabs */
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px 6px 0; background: var(--bar); border-bottom: 1px solid var(--line); }
+.tab { display: flex; align-items: center; border: 1px solid var(--line); border-bottom: 0; border-radius: 5px 5px 0 0;
+       background: var(--panel); max-width: 16em; }
+.tab.active { background: var(--bg); font-weight: 600; }
+.tab button { border: 0; background: transparent; padding: 3px 6px; }
+.tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab.dirty .tab-name::before { content: "● "; color: var(--warn-fg, #b07000); }
+.tab-close { opacity: .6; }
+.tab-close:hover { opacity: 1; }
+.tab-new { border: 0; background: transparent; padding: 3px 8px; }
+
+/* start panel */
+.start-panel { flex: 1; overflow: auto; padding: 18px 22px; }
+.start-panel h2 { margin: 0 0 10px; font-size: 1.3em; }
+.start-panel h3 { margin: 18px 0 6px; font-size: 1em; }
+.start-buttons { display: flex; gap: 8px; }
+
+/* recent files and drafts */
+.recent-list { display: flex; flex-direction: column; gap: 2px; }
+.menu-label { font-size: .8em; opacity: .7; padding: 4px 8px 0; }
+.recent-row { display: flex; align-items: stretch; gap: 2px; }
+.recent-open { flex: 1; display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 0;
+               background: transparent; padding: 3px 8px; min-width: 0; }
+.recent-open:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
+.recent-name { font-weight: 600; max-width: 26em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-folder { font-size: .8em; opacity: .75; max-width: 30em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-row.missing .recent-name { text-decoration: line-through; }
+.recent-forget { border: 0; background: transparent; opacity: .55; padding: 0 6px; }
+.recent-forget:hover { opacity: 1; }
+.recent-empty { margin: 2px 8px; opacity: .7; font-size: .9em; }
+
+/* Open / Save as */
+.file-dialog { width: min(820px, 94vw); }
+.fd-main { display: flex; gap: 10px; min-height: 18em; max-height: 55vh; }
+.fd-roots { width: 13em; flex: none; display: flex; flex-direction: column; gap: 2px; overflow: auto;
+            border-right: 1px solid var(--line); padding-right: 8px; }
+.fd-root { display: flex; }
+.fd-root.current .fd-root-name { background: var(--accent); color: var(--accent-fg); }
+.fd-root-name { flex: 1; text-align: left; border: 0; background: transparent; padding: 4px 6px; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+.fd-root-remove { border: 0; background: transparent; opacity: .55; }
+.fd-add { margin-top: 6px; }
+.fd-folder { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.fd-crumbs { padding: 2px 0 6px; }
+.fd-crumbs button { border: 0; background: transparent; padding: 2px 4px; text-decoration: underline; }
+.fd-list { flex: 1; overflow: auto; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 4px; }
+.fd-row { display: flex; justify-content: space-between; gap: 10px; border: 0; border-radius: 0; background: transparent;
+          text-align: left; padding: 4px 8px; }
+.fd-row:hover { background: var(--panel); }
+.fd-row.selected { background: var(--accent); color: var(--accent-fg); }
+.fd-meta { opacity: .7; font-size: .85em; white-space: nowrap; }
+.fd-empty { padding: 10px; opacity: .8; }
+.fd-message { margin: 0; padding: 6px 8px; border-radius: 4px; background: var(--info-bg); color: var(--info-fg); }
+.fd-message.error { background: var(--err-bg); color: var(--err-fg); }
+.fd-message.warn { background: var(--warn-bg); color: var(--warn-fg); }
+.fd-save-row { display: flex; gap: 10px; align-items: center; }
+.fd-save-row label { flex: 1; display: flex; gap: 8px; align-items: center; }
+.fd-save-row input { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
+.link-button { border: 0; background: transparent; text-decoration: underline; padding: 2px 0; }
