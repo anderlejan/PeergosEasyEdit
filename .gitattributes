@@ -1,3 +1,7 @@
 * text=auto eol=lf
 *.png binary
 *.zip binary
+
+# GitHub language bar: count the app (assets/), not the test and build tools
+tests/** linguist-detectable=false
+tools/** linguist-detectable=false
