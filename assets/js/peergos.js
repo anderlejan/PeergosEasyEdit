@@ -170,6 +170,14 @@ const Peergos = (() => {
       throw new HttpError(res.status, 'Creating the folder');
   }
 
+  // Renames a file or folder in a granted folder; the new name is the body (Peergos 1.40, web-ui AppSandbox.vue:
+  // POST ...?action=rename answers 201). Not in the Peergos book yet.
+  async function renameGranted(grantId, rel, newName) {
+    const res = await request(grantUrl(grantId, rel) + '?action=rename', {method: 'POST', body: newName}, 'Renaming the file');
+    if (res.status !== 201 && res.status !== 200)
+      throw new HttpError(res.status, 'Renaming the file');
+  }
+
   // Peergos' own file picker: [path, writable] (writable for this session only), [] when cancelled.
   async function pickFile() {
     const res = await request('/peergos-api/v0/file-picker/?writable=true', {method: 'GET'}, 'Choosing a file', USER_WAIT_MS);
@@ -234,7 +242,7 @@ const Peergos = (() => {
 
   return {inPeergos, params, filePathFromAddress, queryEncode, fileUrl, grantUrl, sendablePath,
           readUrl, writeUrl, readFile, writeFile, saveAs, grants, askForFolders, revokeGrant, listFolder, makeFolder,
-          pickFile, readData, writeData, deleteData, HttpError, TimeoutError};
+          renameGranted, pickFile, readData, writeData, deleteData, HttpError, TimeoutError};
 })();
 
 if (typeof module !== 'undefined')

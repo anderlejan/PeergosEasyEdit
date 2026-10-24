@@ -6,11 +6,14 @@
 
 const AUTOSAVE_CHOICES = [0, 2, 5, 10, 30];   // seconds after the last change; 0 = off
 const RECENT_CHOICES = [0, 5, 10, 20];
+const UI_SIZES = [12, 13, 14, 15, 16, 18, 20];   // px: menus, buttons, dialogs - not the text being edited
+const SIDE_PANELS = ['off', 'notes', 'history'];
 const $ = id => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
                           fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace",
-                          autoSave: 5, lineNumbers: false, showNotes: false, tabs: false, recent: 10, drafts: true};
+                          autoSave: 5, lineNumbers: false, sidePanel: 'off', tabs: false, recent: 10, drafts: true,
+                          uiSize: 14};
 const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
                 'blue', 'high-contrast'];
 
@@ -108,6 +111,20 @@ const App = {
     refreshState();
     renderTabs();
   },
+  // the file now has another name: the old one is gone from recent files
+  renamed(doc, oldKeys) {
+    if (oldKeys.length) {
+      recent = recent.filter(r => !oldKeys.includes(r.key));
+      noteRecent(doc);
+    }
+    saveSession();
+    refreshState();
+    renderTabs();
+  },
+  historyChanged(doc) {
+    if (doc === active)
+      EditPanel.later();
+  },
 };
 
 function showAppBanner(id, level, text, actions = []) {
@@ -140,6 +157,10 @@ function refreshState() {
   $('saveMenuItem').disabled = $('saveBtn').disabled;
   $('saveAsBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.saving;
   $('closeMenuItem').disabled = !doc;
+  $('renameMenuItem').disabled = !doc || !doc.loaded || doc.saving || doc.renaming || doc.restoreOpen;
+  const editable = !!doc && doc.loaded && !doc.readOnly && !doc.restoreOpen && !!doc.history;
+  $('undoBtn').disabled = !editable || !doc.history.canUndo;
+  $('redoBtn').disabled = !editable || !doc.history.canRedo;
   const name = $('docName');
   name.textContent = doc ? doc.name : 'PeergosEasyEdit';
   name.title = doc ? Loc.folder(doc.lasting || doc.loc) : '';
@@ -203,6 +224,7 @@ function activate(doc) {
   refreshState();
   renderTabs();
   LineNumbers.refresh();
+  EditPanel.render();
   if (doc && doc.loaded && !doc.area.readOnly)
     doc.area.focus();
   saveSession();
@@ -211,10 +233,26 @@ function activate(doc) {
 function addDoc(doc) {
   docs.push(doc);
   $('editorArea').insertBefore(doc.area, $('measure'));
-  doc.area.addEventListener('input', () => {
-    Docs.edited(doc);
+  doc.area.addEventListener('input', e => {
+    Docs.edited(doc, editKind(e.inputType));
     if (doc === active && settings.lineNumbers)
       LineNumbers.later();
+  });
+  // the editor's own undo and redo, also from the browser's context menu
+  doc.area.addEventListener('beforeinput', e => {
+    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+      e.preventDefault();
+      if (e.inputType === 'historyUndo') undo(); else redo();
+    }
+  });
+  doc.area.addEventListener('keydown', e => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey)
+      return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' || k === 'y') {
+      e.preventDefault();
+      if (k === 'y' || e.shiftKey) redo(); else undo();
+    }
   });
   doc.area.addEventListener('scroll', () => { if (doc === active) LineNumbers.follow(); });
   applyLook(doc.area);
@@ -245,6 +283,8 @@ async function makeRoomFor() {
 
 async function closeDoc(doc) {
   if (doc.dirty && !doc.readOnly) {
+    if (doc !== active)
+      activate(doc);      // show what the question is about
     const answer = await askSaveChanges(doc.name);
     if (answer === null)
       return false;
@@ -327,6 +367,71 @@ async function openWithPicker() {
   }
   await openLoc({kind: 'picked', path, writable: writable === true});
 }
+
+/* ---------- undo, redo and the edit history panel ---------- */
+
+function applyHistory(doc, state) {
+  if (!state)
+    return;
+  doc.area.value = state.text;
+  doc.area.setSelectionRange(state.selStart, state.selEnd);
+  doc.area.focus();
+  Docs.edited(doc);       // the history already holds this text: nothing new is recorded
+  App.historyChanged(doc);
+  if (settings.lineNumbers)
+    LineNumbers.later();
+}
+
+const canEdit = doc => !!doc && doc.loaded && !doc.readOnly && !doc.restoreOpen && !!doc.history;
+const undo = () => canEdit(active) && applyHistory(active, active.history.undo());
+const redo = () => canEdit(active) && applyHistory(active, active.history.redo());
+
+// Options → Side panel → Edit history: the steps of the open file, newest first; a click goes back (or forward)
+// to that step. Undone steps stay listed until something new is typed.
+const EditPanel = (() => {
+  let timer = null;
+  const clock = t => new Date(t).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+
+  function render() {
+    clearTimeout(timer);
+    timer = null;
+    if (settings.sidePanel !== 'history')
+      return;
+    const list = $('historyList');
+    const h = active && active.history;
+    $('historyMessage').textContent = !active ? 'No file is open.'
+      : !h ? 'The history starts when the file has been opened.'
+      : h.dropped ? 'The oldest steps were dropped (the history keeps the last ' + HISTORY_MAX_STEPS + ').' : '';
+    $('historyMessage').hidden = !$('historyMessage').textContent;
+    if (!h) {
+      list.replaceChildren();
+      return;
+    }
+    const enabled = canEdit(active);
+    const rows = h.steps.map((st, i) => {
+      const b = el('button', {type: 'button', className: 'history-step' + (i >= h.pos ? ' undone' : '') + (i === h.pos - 1 ? ' current' : ''),
+                              disabled: !enabled, title: i >= h.pos ? 'Redo up to this step' : 'Go back to just after this step',
+                              onclick: () => applyHistory(active, h.goTo(i + 1))},
+        el('span', {className: 'history-what', textContent: EditHistory.describe(st)}),
+        el('span', {className: 'history-when', textContent: clock(st.at) + ' · line ' + st.line}));
+      return el('li', {}, b);
+    }).reverse();
+    rows.push(el('li', {}, el('button', {type: 'button', className: 'history-step' + (h.pos === 0 ? ' current' : ''), disabled: !enabled,
+                                         title: 'Go back to the text as it was opened', onclick: () => applyHistory(active, h.goTo(0))},
+      el('span', {className: 'history-what', textContent: h.dropped ? 'Earlier steps' : 'Opened'}),
+      el('span', {className: 'history-when', textContent: h.dropped ? '' : clock(h.openedAt)}))));
+    list.replaceChildren(...rows);
+  }
+
+  // while typing, at most a few times a second
+  function later() {
+    if (settings.sidePanel !== 'history' || timer)
+      return;
+    timer = setTimeout(() => { timer = null; render(); }, 250);
+  }
+
+  return {render, later};
+})();
 
 /* ---------- recent files ---------- */
 
@@ -448,8 +553,10 @@ function saveSession() {
   }, 800);
 }
 
-// With tabs on, the tabs left open last time come back - on any device. A new text comes back from its draft.
-async function restoreSession() {
+// The editor comes back as it was left, on any device: with tabs, the tabs left open; without, the one file
+// (or nothing - then the start panel shows). A new text comes back from its draft. Opened on a file from the
+// Drive (`fromDrive`) without tabs, that file is shown instead.
+async function restoreSession(fromDrive) {
   let session = null;
   try {
     session = await Store.readJSON('session.json');
@@ -457,12 +564,17 @@ async function restoreSession() {
     toast('The tabs open last time could not be read from Peergos: ' + describeError(e), 'error');
   }
   sessionReady = true;
-  if (!settings.tabs || !session || !Array.isArray(session.tabs))
+  if (!session || !Array.isArray(session.tabs))
     return;
+  let tabs = session.tabs.filter(t => t && Loc.valid(t.loc));
+  if (!settings.tabs) {
+    if (fromDrive)
+      return;
+    const last = tabs.find(t => Loc.key(t.loc) === session.active) || tabs[tabs.length - 1];
+    tabs = last ? [last] : [];
+  }
   const skipped = [];
-  for (const t of session.tabs) {
-    if (!t || !Loc.valid(t.loc))
-      continue;
+  for (const t of tabs) {
     if (!Loc.lasting(t.loc)) {
       const loc = Files.inGrant(t.loc.path);
       if (loc)
@@ -479,12 +591,14 @@ async function restoreSession() {
     }
     await openLoc(t.loc, {keepOthers: true});
   }
-  const want = docs.find(d => Loc.key(d.lasting || d.loc) === session.active);
+  const want = docs.find(d => Loc.key(d.lasting || d.loc) === session.active ||
+                             (d.loc.kind === 'grant' && session.active === 'p:' + Files.grantPath(d.loc.grantId) + '/' + d.loc.rel));
   if (want)
     activate(want);
   if (skipped.length)
-    showAppBanner('skipped', 'info', 'Not reopened (they were opened from the Drive, outside your granted folders): ' +
-                  skipped.join(', ') + '. Open them from the Drive again.', [['OK', () => hideAppBanner('skipped')]]);
+    showAppBanner('skipped', 'info', 'Not reopened (opened from the Drive, outside your granted folders): ' +
+                  skipped.join(', ') + '. Open from the Drive again, or grant the folder (File → Open… → Add folders…) ' +
+                  'so it comes back by itself.', [['OK', () => hideAppBanner('skipped')]]);
 }
 
 /* ---------- settings ---------- */
@@ -500,9 +614,12 @@ function cleanSettings(s) {
     if (Number.isFinite(s.fontSize)) out.fontSize = Math.min(48, Math.max(8, Math.round(s.fontSize)));
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
-    for (const k of ['lineNumbers', 'showNotes', 'tabs', 'drafts'])
+    for (const k of ['lineNumbers', 'tabs', 'drafts'])
       if (typeof s[k] === 'boolean') out[k] = s[k];
     if (RECENT_CHOICES.includes(s.recent)) out.recent = s.recent;
+    if (SIDE_PANELS.includes(s.sidePanel)) out.sidePanel = s.sidePanel;
+    else if (s.showNotes === true) out.sidePanel = 'notes';      // 1.2.0 and older
+    if (UI_SIZES.includes(s.uiSize)) out.uiSize = s.uiSize;
   }
   return out;
 }
@@ -526,8 +643,12 @@ function applySettings() {
   $('tabsCheck').checked = settings.tabs;
   $('draftsCheck').checked = settings.drafts;
   $('lineNumbersCheck').checked = settings.lineNumbers;
-  $('notesPanel').hidden = !settings.showNotes;
-  $('notesBtn').checked = settings.showNotes;
+  $('notesPanel').hidden = settings.sidePanel !== 'notes';
+  $('historyPanel').hidden = settings.sidePanel !== 'history';
+  $('sidePanelSelect').value = settings.sidePanel;
+  $('uiSizeSelect').value = String(settings.uiSize);
+  document.documentElement.style.setProperty('--ui-size', settings.uiSize + 'px');
+  EditPanel.render();
   for (const d of docs)
     applyLook(d.area);
   renderTabs();
@@ -875,7 +996,22 @@ function wire() {
   $('fontSelect').onchange = e => changeSetting('fontFamily', e.target.value);
   $('wrapCheck').onchange = e => changeSetting('wrapLines', e.target.checked);
   $('lineNumbersCheck').onchange = e => changeSetting('lineNumbers', e.target.checked);
-  $('tabsCheck').onchange = e => { changeSetting('tabs', e.target.checked); saveSession(); };
+  $('tabsCheck').onchange = async e => {
+    if (!e.target.checked && docs.length > 1) {
+      // one file at a time from now on: the others are closed, unsaved ones after asking
+      const keep = active;
+      for (const d of docs.filter(x => x !== keep))
+        if (!await closeDoc(d)) {
+          e.target.checked = true;
+          activate(d);
+          toast('Tabs stay on: "' + d.name + '" is still open.');
+          return;
+        }
+      activate(keep);
+    }
+    changeSetting('tabs', e.target.checked);
+    saveSession();
+  };
   $('recentSelect').onchange = e => {
     changeSetting('recent', Number(e.target.value));
     recent = recent.slice(0, settings.recent);
@@ -915,10 +1051,17 @@ function wire() {
   $('fontBiggerBtn').onclick = () => changeSetting('fontSize', settings.fontSize + 2);
   $('fontSmallerBtn').onclick = () => changeSetting('fontSize', settings.fontSize - 2);
 
-  $('notesBtn').onchange = e => {
-    changeSetting('showNotes', e.target.checked);
+  $('sidePanelSelect').onchange = e => {
+    changeSetting('sidePanel', e.target.value);
     LineNumbers.later();   // the editor's width changed
   };
+  $('uiSizeSelect').onchange = e => {
+    changeSetting('uiSize', Number(e.target.value));
+    LineNumbers.later();
+  };
+  $('undoBtn').onclick = undo;
+  $('redoBtn').onclick = redo;
+  $('renameMenuItem').onclick = () => active && Docs.rename(active);
   $('addNoteBtn').onclick = () => editNote(null);
   $('showNotesBtn').onclick = showAllNotes;
   $('notesAllSelect').onclick = () => $('notesAllList').querySelectorAll('input').forEach(b => { b.checked = true; });
@@ -956,8 +1099,8 @@ async function start() {
     toast(moved + ' unsaved text(s) kept in this browser by version 1.1.0 moved to drafts in Peergos.');
   await Files.refreshGrants().catch(() => null);
   await loadRecent();
-  await restoreSession();
   const {path, trusted} = Peergos.filePathFromAddress(location.search);
+  await restoreSession(!!path || /[?&#]path=/.test(location.href));
   if (path && !trusted)
     showAppBanner('mangled', 'error', 'Peergos passed this file\'s name to the editor changed (names with + & # or % are ' +
                   'not passed on correctly), so the editor cannot read or save it safely and did not open it. Open it ' +

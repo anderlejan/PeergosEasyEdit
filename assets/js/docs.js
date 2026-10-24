@@ -49,6 +49,8 @@ class Doc {
     this.draftSince = null;
     this.draftStored = false;
     this.banners = new Map();  // id -> {level, text, actions}
+    this.renaming = false;
+    this.history = null;       // undo, redo and the edit history (history.js), from the text as opened
   }
 
   get key() {
@@ -91,6 +93,7 @@ const Docs = (() => {
     if (doc.loc.kind === 'new') {
       doc.loaded = true;
       doc.state = 'ready';
+      doc.history = new EditHistory(doc.area.value);
       App.changed(doc);
       return;
     }
@@ -114,6 +117,7 @@ const Docs = (() => {
     doc.savedHash = await TextCodec.sha256(bytes);
     doc.loaded = true;
     doc.state = 'ready';
+    doc.history = new EditHistory(doc.area.value);
     if (!decoded.ok) {
       doc.readOnly = true;
       doc.canSave = false;
@@ -158,10 +162,10 @@ const Docs = (() => {
         const fileText = doc.area.value;
         doc.restoreOpen = false;
         doc.area.value = draft.text;
-        edited(doc);
+        edited(doc, 'other', 'Draft restored');
         showBanner(doc, 'restore', 'info', 'The draft is in the editor. ' + (App.settings.autoSave && doc.canSave
           ? 'Autosave puts it in the file.' : 'Save puts it in the file.'), [
-          ['Undo', () => { doc.area.value = fileText; edited(doc); hideBanner(doc, 'restore'); }],
+          ['Undo', () => { doc.area.value = fileText; edited(doc, 'other', 'Draft taken back out'); hideBanner(doc, 'restore'); }],
           ['OK', () => hideBanner(doc, 'restore')]]);
       }],
       ['Discard them', async () => {
@@ -252,7 +256,10 @@ const Docs = (() => {
       save(doc, {auto: true});
   }
 
-  function edited(doc) {
+  // After every change of the text: by typing (kind from the input event), or by the editor itself (label).
+  function edited(doc, kind, label) {
+    if (doc.history && doc.history.record(doc.area.value, kind || 'other', label))
+      App.historyChanged(doc);
     App.changed(doc);
     scheduleAutoSave(doc);
     scheduleDraft(doc);
@@ -266,7 +273,7 @@ const Docs = (() => {
       return;
     if (!doc.canSave || doc.loc.kind === 'new')
       return auto ? undefined : saveAs(doc);
-    if (doc.saving) {
+    if (doc.saving || doc.renaming) {
       doc.saveAgain = true;
       return;
     }
@@ -369,10 +376,10 @@ const Docs = (() => {
         doc.savedText = theirs.text;
         doc.savedHash = await TextCodec.sha256(theirBytes);
         doc.conflict = false;
-        App.changed(doc);
+        edited(doc, 'other', 'Their version shown');
         showBanner(doc, 'conflict', 'info', 'Their version is shown. ' + (kept ? 'Yours is kept as a draft in Peergos.'
                    : 'Yours is not saved anywhere: bring it back to keep it.'), [
-          ['Bring mine back', () => { doc.area.value = mine; hideBanner(doc, 'conflict'); edited(doc); }],
+          ['Bring mine back', () => { doc.area.value = mine; hideBanner(doc, 'conflict'); edited(doc, 'other', 'Your version brought back'); }],
           ['Forget mine', async () => { hideBanner(doc, 'conflict'); await dropDraft(doc); App.changed(doc); }]]);
       }],
       ['Overwrite with mine', () => { doc.overwriteOnce = true; doc.conflict = false; hideBanner(doc, 'conflict'); save(doc); }],
@@ -439,6 +446,119 @@ const Docs = (() => {
     }
   }
 
+  /* ---------- renaming ---------- */
+
+  function nameProblem(name) {
+    if (!name.trim())
+      return 'The name is empty.';
+    if (name.includes('/'))
+      return 'A name cannot contain "/".';
+    if (name.startsWith('.'))
+      return 'Peergos does not let apps use names that start with a dot.';
+    return null;
+  }
+
+  async function askName(doc, label) {
+    const name = await askText(label, doc.name, 'Rename');
+    if (name === null || name === doc.name)
+      return null;
+    const problem = nameProblem(name);
+    if (problem) {
+      toast('Not renamed: ' + problem, 'error');
+      return null;
+    }
+    return name;
+  }
+
+  // Renames the file in Peergos (only possible in a granted folder) and goes on editing it under the new name.
+  // A new text just gets the name it will be saved under.
+  async function rename(doc) {
+    if (!doc.loaded || doc.saving || doc.renaming || doc.restoreOpen)
+      return;
+    if (doc.loc.kind === 'new') {
+      const name = await askName(doc, 'New name for this text (it is saved under it):');
+      if (name === null)
+        return;
+      doc.loc.name = name;
+      doc.name = name;
+      if (doc.draftStored)
+        storeDraft(doc, true);
+      App.renamed(doc, []);
+      return;
+    }
+    let target = doc.lasting && doc.lasting.kind === 'grant' ? doc.lasting : null;
+    if (!target && doc.loc.kind !== 'grant' && Files.supported() && Files.inGrant(doc.loc.path)) {
+      try {      // its folder was granted after the file was opened
+        target = await Files.lastingFor(doc.loc.path, await Peergos.readUrl(Loc.url(doc.loc)));
+      } catch (e) {
+        target = null;
+      }
+    }
+    if (!target) {
+      showBanner(doc, 'rename', 'info', 'Peergos lets the editor rename files only in the folders you granted it, and ' +
+                 'this file is not in one of them. Rename it in the Drive, or grant its folder (File → Open… → Add ' +
+                 'folders…) and try again.', [['OK', () => hideBanner(doc, 'rename')]]);
+      return;
+    }
+    const name = await askName(doc, 'Rename "' + doc.name + '" to:');
+    if (name === null)
+      return;
+    if (doc.saving) {
+      toast('Not renamed: the file is being saved. Try again in a moment.', 'error');
+      return;
+    }
+    const dir = target.rel.includes('/') ? target.rel.slice(0, target.rel.lastIndexOf('/') + 1) : '';
+    const renamed = {kind: 'grant', grantId: target.grantId, rel: dir + name};
+    doc.renaming = true;
+    App.changed(doc);
+    try {
+      try {
+        await Peergos.readUrl(Loc.url(renamed));
+        toast('Not renamed: "' + name + '" exists in that folder already.', 'error');
+        return;
+      } catch (e) {
+        if (!(e instanceof Peergos.HttpError && e.status === 404))
+          throw e;
+      }
+      await Peergos.renameGranted(target.grantId, target.rel, name);
+      let found = true;
+      try {
+        await Peergos.readUrl(Loc.url(renamed));
+      } catch (e) {
+        found = false;
+      }
+      const oldKeys = [doc.key, Loc.key(target)];
+      const hadDraft = doc.draftStored;
+      doc.loc = renamed;
+      doc.lasting = renamed;
+      doc.name = name;
+      if (!doc.readOnly)
+        doc.canSave = true;
+      hideBanner(doc, 'rename');
+      if (hadDraft) {
+        await dropDraft(doc, oldKeys[0]);
+        doc.draftStored = false;
+        storeDraft(doc, true);
+      }
+      App.renamed(doc, oldKeys);
+      if (found)
+        toast('Renamed to "' + name + '".');
+      else
+        showBanner(doc, 'rename', 'warn', 'Peergos reported the file as renamed, but it could not be read under the new ' +
+                   'name. Check the folder in the Drive. Your text is still here.', [['OK', () => hideBanner(doc, 'rename')]]);
+    } catch (e) {
+      toast('Not renamed: ' + describeError(e), 'error');
+    } finally {
+      doc.renaming = false;
+      App.changed(doc);
+      if (doc.saveAgain) {
+        doc.saveAgain = false;
+        if (doc.dirty)
+          save(doc);
+      }
+    }
+  }
+
   // Peergos without granted folders: its own save dialog (it asks for the name; the path is not returned).
   async function saveThroughPeergos(doc) {
     const text = doc.area.value;
@@ -470,5 +590,5 @@ const Docs = (() => {
     }
   }
 
-  return {load, save, saveAs, edited, autoSaveNow, storeDraft, dropDraft, showBanner, hideBanner, scheduleAutoSave};
+  return {load, save, saveAs, rename, edited, autoSaveNow, storeDraft, dropDraft, showBanner, hideBanner, scheduleAutoSave};
 })();

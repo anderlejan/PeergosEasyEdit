@@ -19,11 +19,16 @@
         <hr>
         <button type="button" role="menuitem" id="saveMenuItem">Save <kbd>Ctrl+S</kbd></button>
         <button type="button" role="menuitem" id="saveAsBtn" disabled>Save as… <kbd>Ctrl+Shift+S</kbd></button>
+        <button type="button" role="menuitem" id="renameMenuItem" disabled>Rename…</button>
         <hr>
         <button type="button" role="menuitem" id="closeMenuItem" disabled>Close</button>
       </div>
     </div>
     <button type="button" id="saveBtn" class="primary" title="Save (Ctrl+S)" disabled>Save</button>
+    <span class="group" role="group" aria-label="Undo and redo">
+      <button type="button" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
+      <button type="button" id="redoBtn" title="Redo (Ctrl+Y)" aria-label="Redo" disabled>↷</button>
+    </span>
     <span class="group" role="group" aria-label="Text size">
       <button type="button" id="fontSmallerBtn" title="Smaller text">A−</button>
       <span id="fontSizeLabel" class="size-label">14</span>
@@ -65,6 +70,17 @@
             </optgroup>
           </select>
         </label>
+        <label title="Size of the menus, buttons and windows (A− and A+ change the text you edit)">Interface size
+          <select id="uiSizeSelect">
+            <option value="12">12</option>
+            <option value="13">13</option>
+            <option value="14">14 (normal)</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="18">18</option>
+            <option value="20">20</option>
+          </select>
+        </label>
         <label title="Save by itself this long after the last change (and at least every 30 s while typing)">Autosave
           <select id="autoSaveSelect">
             <option value="0">Off</option>
@@ -86,7 +102,13 @@
           <input type="checkbox" id="tabsCheck"> Tabs</label>
         <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
         <label class="check"><input type="checkbox" id="lineNumbersCheck"> Line numbers</label>
-        <label class="check"><input type="checkbox" id="notesBtn"> Notes panel</label>
+        <label title="A panel on the right: your notes, or the steps of editing the open file">Side panel
+          <select id="sidePanelSelect">
+            <option value="off">Off</option>
+            <option value="notes">Notes</option>
+            <option value="history">Edit history</option>
+          </select>
+        </label>
         <hr>
         <button type="button" id="backupBtn">Backup…</button>
         <button type="button" id="helpBtn">Help…</button>
@@ -124,6 +146,14 @@
       </div>
       <p id="notesMessage" class="notes-message" hidden></p>
       <ul id="notesList" class="notes-list"></ul>
+    </aside>
+    <aside id="historyPanel" class="notes-panel history-panel" hidden>
+      <div class="notes-head">
+        <h2>Edit history</h2>
+      </div>
+      <p class="history-note">Click a step to go back to it. Kept only while the file is open – not saved anywhere.</p>
+      <p id="historyMessage" class="notes-message" hidden></p>
+      <ol id="historyList" class="history-list"></ol>
     </aside>
   </main>
 
@@ -240,8 +270,9 @@
       <div class="prose">
         <h3>Opening a file</h3>
         <p>Open a text file from your Peergos Drive with PeergosEasyEdit, or start the editor from the launcher and
-          use <b>File → Open…</b>. Started from the launcher, the editor shows <b>New text</b>, <b>Open…</b>, your
-          recent files and any unsaved texts kept in Peergos.</p>
+          use <b>File → Open…</b>. Started from the launcher, the editor comes back as you left it, on any device:
+          with your tabs, with the one file you had open, or – if you closed everything – with <b>New text</b>,
+          <b>Open…</b>, your recent files and any unsaved texts kept in Peergos.</p>
         <h3>Granted folders</h3>
         <p><b>Open…</b> and <b>Save as…</b> browse the folders you let the editor use. Choose <b>+ Add
           folders…</b>: Peergos asks which folders. Peergos remembers them on every device until you remove them
@@ -267,10 +298,22 @@
           with the new file. Without granted folders, Peergos' own save dialog is used and the editor keeps working
           on the file it opened.</p>
         <h3>Tabs</h3>
-        <p><b>Options → Tabs</b> lets you keep several files open, one per tab (+ starts a new text). Without tabs,
-          opening a file closes the one before (asking first if it has unsaved changes). With tabs, the tabs you
-          leave open come back the next time the editor starts, on any device. A file opened from the Drive comes
-          back only if it is in a granted folder.</p>
+        <p>Without tabs, one file is open at a time: opening or starting another closes it, after asking whether to
+          save it if it has unsaved changes. <b>Options → Tabs</b> lets you keep several files open, one per tab (+
+          starts a new text). Switching tabs off closes all but the file shown, asking about each one with unsaved
+          changes; if you cancel, tabs stay on. Whatever is open when you leave comes back the next time the editor
+          starts from the launcher. A file opened from the Drive comes back only if it is in a granted folder.</p>
+        <h3>Renaming</h3>
+        <p><b>File → Rename…</b> renames the open file in Peergos; the new name shows at once and unsaved changes
+          stay in the editor. Peergos lets the editor rename files only in granted folders; for a file opened from
+          elsewhere, rename it in the Drive or grant its folder first. A new text just gets the name it will be
+          saved under.</p>
+        <h3>Undo and redo</h3>
+        <p>↶ and ↷ in the bar, or Ctrl+Z and Ctrl+Y (also Ctrl+Shift+Z). Typing without a pause counts as one step.
+          A restored draft or "their version" after a conflict can be undone the same way. <b>Options → Side panel →
+          Edit history</b> lists the steps of the file shown, newest first; click one to go back to it, or forward
+          again. Undoing all the way back to what is in the file means there is nothing left to save. The history
+          is kept only while the file is open – it is not saved anywhere.</p>
         <h3>Recent files</h3>
         <p><b>File</b> lists the files you opened last (how many: <b>Options → Recent files</b>, or off). A file
           that was deleted or moved meanwhile is marked <i>not found</i>; × removes it from the list. The list is
@@ -292,11 +335,12 @@
         <p>Files are read and written as UTF-8. A file that is not valid UTF-8 opens read-only, so it cannot be
           damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
         <h3>Look</h3>
-        <p>A− and A+ change the text size. Under <b>Options</b>: theme, font, autosave, line wrapping, line numbers
-          the notes panel, tabs and recent files. Every choice applies and is saved at once, in Peergos, so it is the same on every
-          device.</p>
+        <p>A− and A+ change the size of the text you edit; <b>Options → Interface size</b> changes the menus,
+          buttons and windows. Also under <b>Options</b>: theme, font, autosave, recent files, tabs, line wrapping,
+          line numbers and the side panel. Every choice applies and is saved at once, in Peergos, so it is the same
+          on every device.</p>
         <h3>Notes</h3>
-        <p><b>Options → Notes panel</b> shows a panel for your own notes about anything. They are saved in the
+        <p><b>Options → Side panel → Notes</b> shows a panel for your own notes about anything. They are saved in the
           app's own folder in Peergos. <b>Show all</b> puts every note in one window with a tick box each, to read
           them together or copy the ticked ones. If the notes cannot be read, the panel says so and does not change
           them until they could be read.</p>
@@ -364,6 +408,7 @@
   <script src="js/peergos.js"></script>
   <script src="js/text.js"></script>
   <script src="js/store.js"></script>
+  <script src="js/history.js"></script>
   <script src="js/files.js"></script>
   <script src="js/docs.js"></script>
   <script src="js/app.js"></script>

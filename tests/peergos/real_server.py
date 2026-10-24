@@ -9,7 +9,8 @@ stored on the server, read with PG.java through the Peergos Java API - not throu
 Server, user, password and jar come from the environment or .env (see .env.example): PEERGOS_URL,
 PEERGOS_TEST_USER, PEERGOS_TEST_PASSWORD, PEERGOS_JAR.
 
-Scenarios: v12 (1.2.0: Open through a granted folder, Save as into a new folder, tabs, a draft, reopen from the
+Scenarios: v13 (1.3.0: rename through a granted folder, undo and redo with real typing, the edit history, the
+interface size, single mode back as left from the launcher), v12 (1.2.0: Open through a granted folder, Save as into a new folder, tabs, a draft, reopen from the
 launcher with the tabs back, nothing on the device), control (open, edit, save), autosave (no Save pressed, also after a worker stop), sw-stop (stop the sandbox service worker - what the browser does when
 idle - then save), names (file names with + and &), stale (file changed elsewhere, read again), upgrade
 (version, notes, settings after installing over an older version), pct (a name with % - Peergos cannot open it).
@@ -237,7 +238,7 @@ def main():
                 f.click('#optionsMenuBtn')
                 time.sleep(0.5)
                 page.screenshot(path=os.path.join(A.shots, 'options.png'))
-                f.evaluate("['lineNumbersCheck', 'notesBtn'].forEach(id => { const c = document.getElementById(id); if (!c.checked) c.click(); })")
+                f.evaluate("() => { const c = document.getElementById('lineNumbersCheck'); if (!c.checked) c.click(); const s = document.getElementById('sidePanelSelect'); s.value = 'notes'; s.dispatchEvent(new Event('change')); }")
                 f.click('#fileMenuBtn')
                 time.sleep(0.8)
                 page.screenshot(path=os.path.join(A.shots, 'file-menu-lines-notes.png'))
@@ -339,6 +340,91 @@ def main():
                 after = server_text(path)
                 print('  server file now: %r -> %s' % (after, 'SAVED' if after == new_text else 'NOT SAVED'), flush=True)
                 close_app(page)
+
+        if A.scenario == 'v13':
+            os.makedirs(A.shots, exist_ok=True)
+            docs = '/%s/docs' % USER
+            STATE = """() => ({open: docs.map(d => d.name), text: document.getElementById('editor') ? document.getElementById('editor').value : null,
+                status: document.getElementById('status').textContent, start: !document.getElementById('startPanel').hidden,
+                banners: [...document.querySelectorAll('.banner p')].map(b => b.textContent), title: document.title,
+                undo: !document.getElementById('undoBtn').disabled, redo: !document.getElementById('redoBtn').disabled})"""
+
+            def prompt(f, text):
+                f.evaluate("t => { document.getElementById('promptInput').value = t; document.getElementById('promptOk').click(); }", text)
+
+            f = open_file(page, docs, 'notes.txt')
+            print('1. opened from the Drive (single mode):', f.evaluate(STATE), flush=True)
+            f.evaluate("document.getElementById('renameMenuItem').click()")
+            time.sleep(1)
+            print('   Rename before any grant:', f.evaluate(STATE)['banners'], flush=True)
+            f.evaluate("document.getElementById('openMenuItem').click()")
+            time.sleep(1.5)
+            f.evaluate("document.querySelector('.fd-add').click()")
+            wait(lambda: page.evaluate("() => { const c = " + VUE + ".find('addGrants'); return !!(c && c.showFolderPicker); }"), 'Peergos folder picker', 30)
+            page.evaluate("p => " + VUE + ".find('addGrants').selectedFoldersFromPicker(p, {write: true, persist: true})", [docs])
+            wait(lambda: f.evaluate("document.querySelectorAll('#fdList .fd-row').length > 0"), 'granted folder listed', 60)
+            f.evaluate("document.getElementById('fdCancel').click()")
+            time.sleep(1)
+
+            gid = f.evaluate("fetch('/peergos-api/v0/grants/').then(r => r.json()).then(g => g[0].grantId)")
+            put = "([u, b]) => fetch(u, {method: 'PUT', body: b}).then(r => r.status)"
+            post = "([u, b]) => fetch(u, {method: 'POST', body: b}).then(async r => r.status + ' ' + (await r.text()).slice(0, 80))"
+            base = '/peergos-api/v0/folder/' + gid + '/'
+            print('2. probe: PUT one.txt', f.evaluate(put, [base + 'one.txt', 'ONE']), '| PUT two.txt', f.evaluate(put, [base + 'two.txt', 'TWO']), flush=True)
+            print('   rename one.txt to two.txt (taken):', f.evaluate(post, [base + 'one.txt?action=rename', 'two.txt']),
+                  '| one.txt now:', repr(server_text(docs + '/one.txt')), '| two.txt now:', repr(server_text(docs + '/two.txt')), flush=True)
+            print('   rename a missing file:', f.evaluate(post, [base + 'nope.txt?action=rename', 'x.txt']), flush=True)
+
+            f.evaluate("document.getElementById('renameMenuItem').click()")
+            time.sleep(1)
+            print('3. Rename dialog shows:', f.evaluate("document.getElementById('promptDialog').open && document.getElementById('promptInput').value"), flush=True)
+            prompt(f, 'two.txt')
+            time.sleep(3)
+            print('   to a taken name:', f.evaluate("document.getElementById('toast').textContent"), '| notes.txt still:', server_text(docs + '/notes.txt') is not None, flush=True)
+            f.evaluate("document.getElementById('renameMenuItem').click()")
+            time.sleep(1)
+            new = 'renamed & 100% #1.txt'
+            prompt(f, new)
+            wait(lambda: f.evaluate("n => document.getElementById('docName').textContent === n", new), 'new name shown', 60)
+            st = f.evaluate(STATE)
+            print('   renamed:', st['title'], '| server new:', repr(server_text(docs + '/' + new)), '| old exists:', server_text(docs + '/notes.txt') is not None, flush=True)
+
+            f.evaluate("() => { const e = document.getElementById('editor'); e.focus(); e.setSelectionRange(e.value.length, e.value.length); }")
+            page.keyboard.type('typed one')
+            time.sleep(1.5)
+            page.keyboard.type(' two')
+            time.sleep(0.5)
+            print('4. real typing:', repr(f.evaluate(STATE)['text'][-20:]), flush=True)
+            f.evaluate("document.getElementById('undoBtn').click()")
+            print('   Undo button:', repr(f.evaluate(STATE)['text'][-20:]), flush=True)
+            page.keyboard.press('Control+z')
+            st = f.evaluate(STATE)
+            print('   Ctrl+Z:', repr(st['text'][-20:]), '| status:', st['status'], '| undo/redo enabled:', st['undo'], st['redo'], flush=True)
+            page.keyboard.press('Control+y')
+            print('   Ctrl+Y:', repr(f.evaluate(STATE)['text'][-20:]), flush=True)
+            f.evaluate("() => { const s = document.getElementById('sidePanelSelect'); s.value = 'history'; s.dispatchEvent(new Event('change')); }")
+            f.evaluate("() => { const s = document.getElementById('uiSizeSelect'); s.value = '18'; s.dispatchEvent(new Event('change')); }")
+            time.sleep(1)
+            print('   history panel:', f.evaluate("[...document.querySelectorAll('#historyList .history-step')].map(b => b.textContent)"), flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'v13-history-ui18.png'))
+            f.evaluate("document.getElementById('saveBtn').click()")
+            time.sleep(4)
+            print('   saved:', f.evaluate(STATE)['status'], '| server:', repr(server_text(docs + '/' + new)[-20:]), flush=True)
+            f.evaluate("() => { const s = document.getElementById('uiSizeSelect'); s.value = '14'; s.dispatchEvent(new Event('change')); }")
+            time.sleep(2)
+            close_app(page)
+
+            f = launch(page)
+            print('5. single mode, from the Launcher:', f.evaluate(STATE), flush=True)
+            f.evaluate("document.getElementById('closeMenuItem').click()")
+            time.sleep(3)
+            close_app(page)
+            f = launch(page)
+            st = f.evaluate(STATE)
+            print('6. all closed, from the Launcher: start panel', st['start'], '| open:', st['open'],
+                  '| recent:', f.evaluate("[...document.querySelectorAll('#startRecent .recent-name')].map(e => e.textContent)"), flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'v13-start.png'))
+            close_app(page)
 
         if A.scenario == 'v12':
             os.makedirs(A.shots, exist_ok=True)

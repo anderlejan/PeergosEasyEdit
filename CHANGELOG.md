@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+Fixed
+- Without tabs, more than one file could stay open: switching tabs off only hid the tab bar. It now closes all but
+  the file shown, asking about each one with unsaved changes (cancel keeps tabs on).
+- Started from the launcher without tabs, the editor did not come back with the file left open. It now comes back
+  as it was left in both modes: the tabs, the one file, or the start screen when everything was closed. Opened on
+  a file from the Drive without tabs, it shows just that file.
+
+Added
+- **Undo** and **Redo** buttons (also Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z); typing without a pause is one step, and a
+  restored draft or "their version" after a conflict can be undone too.
+- **Options → Side panel**: Off, Notes or **Edit history** – the steps of the file shown, newest first; a click
+  goes back (or forward) to a step. Kept only while the file is open, never stored.
+- **File → Rename…**: renames the file in Peergos (in granted folders) and shows the new name at once; a new text
+  gets the name it will be saved under.
+- **Options → Interface size** for menus, buttons and windows, separate from the size of the text (A− A+).
+- Closing a tab in the background that has unsaved changes shows it before asking.
+
+Changed
+- "Notes panel" in Options became "Side panel"; a notes panel that was on stays on.
+
 ## 1.2.0
 Fixed
 - The Notes button did not hide the notes panel (it was always shown).

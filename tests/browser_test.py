@@ -137,6 +137,10 @@ class App:
     def tabs(self):
         return self.ev("[...document.querySelectorAll('#tabs .tab-name')].map(t => t.textContent)")
 
+    def side(self, value):
+        self.ev("v => { const s = document.getElementById('sidePanelSelect'); s.value = v; s.dispatchEvent(new Event('change')); }", value)
+        time.sleep(0.2)
+
     def menu(self, item):
         self.ev("id => document.getElementById(id).click()", item)
         time.sleep(0.3)
@@ -241,8 +245,12 @@ def main():
         ok('editor read-only, Save off', app.readonly() and app.ev("document.getElementById('saveBtn').disabled"))
         app.ev("document.dispatchEvent(new KeyboardEvent('keydown', {key: 's', ctrlKey: true}))"); time.sleep(0.5)
         ok('file untouched', server_file(doc) == b'precious\n')
-        config(fail={}); app.click_banner('Try again'); time.sleep(0.8)
-        ok('Try again opens it', app.text() == 'precious\n' and not app.readonly(), app.text())
+        config(fail={}); app.click_banner('Try again')
+        try:
+            wait(lambda: app.text() == 'precious\n' and not app.readonly(), 'the file to open', 5)
+        except TimeoutError:
+            pass
+        ok('Try again opens it', app.text() == 'precious\n' and not app.readonly(), (app.text(), app.readonly()))
         app.close()
         app = App(ctx, '/alice/docs/missing.txt')
         ok('missing file: says so, Save off', any('not found' in b for b in app.banners()) and app.ev("document.getElementById('saveBtn').disabled"), app.banners())
@@ -364,7 +372,7 @@ def main():
         mock('/mock/data?name=notes.json', 'PUT', json.dumps([{'id': 1, 'title': 'Keep me', 'content': 'important'}]).encode())
         config(failData={'GET': 500})
         app = App(ctx, doc)
-        app.ev("document.getElementById('notesBtn').click()")
+        app.side('notes')
         ok('notes read error shown, Add off', app.ev("!document.getElementById('notesMessage').hidden && document.getElementById('addNoteBtn').disabled"))
         config(failData={})
         app.ev("[...document.querySelectorAll('#notesMessage button')][0].click()"); time.sleep(0.6)
@@ -463,12 +471,12 @@ def main():
         ok('opening File closes Options', app.ev("document.getElementById('optionsMenu').hidden && !document.getElementById('fileMenu').hidden"))
         app.page.keyboard.press('Escape')
         ok('Escape closes the menu', app.ev("document.getElementById('fileMenu').hidden"))
-        app.page.click('#optionsMenuBtn'); app.page.click('#notesBtn')
-        ok('ticking Notes shows the panel', app.ev("getComputedStyle(document.getElementById('notesPanel')).display") != 'none')
-        ok('Options stays open while ticking boxes', app.ev("!document.getElementById('optionsMenu').hidden"))
-        app.page.click('#notesBtn')
-        ok('unticking Notes hides the panel again', app.ev("getComputedStyle(document.getElementById('notesPanel')).display") == 'none')
-        app.page.click('#notesBtn')
+        app.page.click('#optionsMenuBtn'); app.page.select_option('#sidePanelSelect', 'notes')
+        ok('Side panel: Notes shows the notes', app.ev("getComputedStyle(document.getElementById('notesPanel')).display") != 'none')
+        ok('Options stays open while choosing', app.ev("!document.getElementById('optionsMenu').hidden"))
+        app.page.select_option('#sidePanelSelect', 'off')
+        ok('Side panel: Off hides it again', app.ev("getComputedStyle(document.getElementById('notesPanel')).display") == 'none')
+        app.page.select_option('#sidePanelSelect', 'notes')
         app.page.click('#lineNumbersCheck')
         time.sleep(0.5)
         nums = app.ev("[...document.querySelectorAll('#gutterLines div')].map(d => d.textContent)")
@@ -486,7 +494,7 @@ def main():
            app.ev("document.body.className") == 'theme-nord')
         time.sleep(1.0)
         st = data_json('settings.json')
-        ok('panel, line numbers, wrap and theme saved', st['showNotes'] is True and st['lineNumbers'] is True and
+        ok('panel, line numbers, wrap and theme saved', st['sidePanel'] == 'notes' and st['lineNumbers'] is True and
            st['wrapLines'] is False and st['theme'] == 'nord', st)
         app.ev("document.getElementById('showNotesBtn').click()")
         ok('Show all lists every note with a tick box', app.ev("document.querySelectorAll('#notesAllList input[type=checkbox]').length") == 2)
@@ -544,6 +552,10 @@ def main():
         ok('recent files kept in Peergos', [r['name'] for r in recent] == ['copy.txt', 'C++ & a;b 100% #1.txt'], recent)
         app.close()
         app = App(ctx7, None)
+        ok('single mode, launcher start: the file left open comes back', app.text() == 'edited copy\n' and app.tabs() == [], (app.text(), app.tabs()))
+        app.menu('closeMenuItem'); time.sleep(1.2)
+        app.close()
+        app = App(ctx7, None)
         names = app.ev("[...document.querySelectorAll('#startRecent .recent-name')].map(e => e.textContent)")
         ok('launcher start lists the recent files', names == ['copy.txt', 'C++ & a;b 100% #1.txt'], names)
         with mock_peergos.LOCK:
@@ -558,6 +570,12 @@ def main():
         app.type_text('a brand new text\n'); time.sleep(1.0)
         ok('a new text is kept as a draft right away', [d['text'] for d in drafts()] == ['a brand new text\n'], drafts())
         app.close()
+        app = App(ctx7, None); time.sleep(0.5)
+        ok('single mode: the unsaved new text comes back by itself', app.text() == 'a brand new text\n' and app.status() == 'Not saved yet',
+           (app.text(), app.status()))
+        app.close()
+        with mock_peergos.LOCK:
+            mock_peergos.DATA.pop('session.json', None)     # its tab is not in the last session (e.g. another device's)
         app = App(ctx7, None)
         ok('the start panel offers the unsaved new text', 'untitled.txt' in app.ev("document.getElementById('startDrafts').textContent"))
         app.ev("document.querySelector('#startDrafts .recent-open').click()"); time.sleep(0.6)
@@ -642,6 +660,144 @@ def main():
         time.sleep(0.8)
         ok('listed once in recent files', [r['name'] for r in data_json('recent.json')] == ['x.txt'], data_json('recent.json'))
         ok('no script errors', not app.errors, app.errors)
+        app.close()
+
+        print('13. single and tab mode, back as left, interface size, rename, undo and redo', flush=True)
+        reset(tabs=True)
+        grant('/alice/T')
+        for n in 'abc':
+            put_file('/alice/T/%s.txt' % n, n.upper().encode() + b'\n')
+        app = App(fresh_ctx(), '/alice/T/a.txt')
+        for n in 'bc':
+            app.menu('openMenuItem'); time.sleep(0.3)
+            app.fd_click(n + '.txt', double=True); time.sleep(0.8)
+        open_names = lambda: app.ev("docs.map(d => d.name)")
+        ok('tab mode: three files open', open_names() == ['a.txt', 'b.txt', 'c.txt'], open_names())
+        app.ev("[...document.querySelectorAll('#tabs .tab-name')][1].click()"); time.sleep(0.2)
+        app.type_text('B changed\n')
+        app.ev("[...document.querySelectorAll('#tabs .tab-name')][2].click()"); time.sleep(0.2)
+
+        def tabs_on(v):
+            app.ev("v => { const c = document.getElementById('tabsCheck'); c.checked = v; c.dispatchEvent(new Event('change')); }", v)
+            time.sleep(0.6)
+        tabs_on(False)
+        ok('Tabs off: asks about the unsaved file, and shows it', app.dialog_open('choiceDialog') and app.text() == 'B changed\n', app.text())
+        app.ev("document.getElementById('choiceDialog').close('cancel')"); time.sleep(0.5)
+        ok('cancelled: tabs stay on, the unsaved file stays open', app.ev("document.getElementById('tabsCheck').checked") and
+           open_names() == ['b.txt', 'c.txt'], open_names())
+        app.ev("[...document.querySelectorAll('#tabs .tab-name')][1].click()"); time.sleep(0.2)   # c.txt shown again
+        tabs_on(False)
+        app.ev("document.getElementById('choiceDialog').close('discard')"); time.sleep(0.6)
+        ok("Don't save: only the file that was shown is left, no tab bar", open_names() == ['c.txt'] and
+           app.ev("document.getElementById('tabs').hidden") and app.text() == 'C\n', (open_names(), app.text()))
+        time.sleep(1.2)
+        ok('tabs off is saved, and the open file', data_json('settings.json')['tabs'] is False and
+           [t['name'] for t in data_json('session.json')['tabs']] == ['c.txt'], data_json('session.json'))
+        app.type_text('C changed\n')
+        app.menu('openMenuItem'); time.sleep(0.3)
+        app.fd_click('a.txt', double=True); time.sleep(0.6)
+        ok('single mode: opening another file asks about the unsaved one first', app.dialog_open('choiceDialog'))
+        app.ev("document.getElementById('choiceDialog').close('save')"); time.sleep(1.2)
+        ok('saved, then the other file took its place', server_file('/alice/T/c.txt') == b'C changed\n' and open_names() == ['a.txt'],
+           (server_file('/alice/T/c.txt'), open_names()))
+        time.sleep(1.0)
+        app.close()
+        app = App(fresh_ctx(), None); time.sleep(0.5)
+        ok('single mode, started from the launcher: the file left open is back', open_names() == ['a.txt'] and app.text() == 'A\n', open_names())
+        app.close()
+        app = App(fresh_ctx(), '/alice/T/b.txt'); time.sleep(0.5)
+        ok('single mode, opened on a file from the Drive: only that file', open_names() == ['b.txt'], open_names())
+
+        app.ev("const s = document.getElementById('uiSizeSelect'); s.value = '18'; s.dispatchEvent(new Event('change'))")
+        time.sleep(1.0)
+        ok('Interface size 18: buttons and menus bigger', app.ev("getComputedStyle(document.getElementById('saveBtn')).fontSize") == '18px')
+        ok('the text being edited keeps its own size', app.ev("getComputedStyle(document.getElementById('editor')).fontSize") == '14px')
+        ok('interface size saved in Peergos', data_json('settings.json')['uiSize'] == 18)
+
+        def rename_to(name):
+            app.menu('renameMenuItem')
+            app.ev("t => { document.getElementById('promptInput').value = t; document.getElementById('promptOk').click(); }", name)
+            time.sleep(0.8)
+        app.type_text('B edited, not saved\n')
+        app.menu('renameMenuItem')
+        ok('Rename asks for the new name', app.dialog_open('promptDialog') and app.ev("document.getElementById('promptInput').value") == 'b.txt')
+        app.ev("document.getElementById('promptDialog').close('cancel')"); time.sleep(0.3)
+        rename_to('a.txt')
+        ok('a name that is taken is refused', server_file('/alice/T/b.txt') == b'B\n' and server_file('/alice/T/a.txt') == b'A\n' and
+           app.ev("document.getElementById('docName').textContent") == 'b.txt')
+        new = 'b renamed & 100%.txt'
+        rename_to(new)
+        ok('renamed in Peergos', server_file('/alice/T/' + new) == b'B\n' and server_file('/alice/T/b.txt') is None)
+        ok('the new name shows at once', app.ev("document.getElementById('docName').textContent") == new and
+           app.ev("document.title").startswith('● ' + new), app.ev("document.title"))
+        ok('the unsaved text is still there', app.text() == 'B edited, not saved\n')
+        app.save(); app.wait_idle()
+        ok('Save goes to the renamed file', server_file('/alice/T/' + new) == b'B edited, not saved\n' and server_file('/alice/T/b.txt') is None)
+        time.sleep(1.0)
+        names = [r['name'] for r in data_json('recent.json')]
+        ok('recent files: the new name, not the old one', new in names and 'b.txt' not in names, names)
+        ok('the open file is kept under its new name', [t['name'] for t in data_json('session.json')['tabs']] == [new])
+        app.menu('newMenuItem'); time.sleep(0.4)
+        rename_to('ideas.txt')
+        ok('a new text takes the name', app.ev("document.getElementById('docName').textContent") == 'ideas.txt')
+        app.type_text('an idea\n'); app.save(); time.sleep(0.5)
+        ok('and is saved under it', app.dialog_open('fileDialog') and app.ev("document.getElementById('fdName').value") == 'ideas.txt')
+        app.ev("document.getElementById('fdCancel').click()"); time.sleep(0.3)
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+        put_file('/alice/elsewhere/z.txt', b'Z\n')
+        app = App(fresh_ctx(), '/alice/elsewhere/z.txt')
+        app.menu('renameMenuItem'); time.sleep(0.5)
+        ok('outside the granted folders: says why it cannot rename', any('only in the folders you granted' in b for b in app.banners()) and
+           not app.dialog_open('promptDialog'), app.banners())
+        app.close()
+
+        reset()
+        put_file('/alice/u.txt', b'start\n')
+        app = App(fresh_ctx(), '/alice/u.txt')
+        ok('Undo and Redo greyed out before any change', app.ev("document.getElementById('undoBtn').disabled && document.getElementById('redoBtn').disabled"))
+        app.page.focus('#editor'); app.page.keyboard.press('Control+End')
+        app.page.keyboard.type('one'); time.sleep(1.2); app.page.keyboard.type(' two'); time.sleep(0.3)
+        ok('typed', app.text() == 'start\none two', app.text())
+        app.ev("document.getElementById('undoBtn').click()"); time.sleep(0.2)
+        ok('Undo takes back the last run of typing', app.text() == 'start\none', app.text())
+        app.page.keyboard.press('Control+z'); time.sleep(0.2)
+        ok('Ctrl+Z: back to the text as opened, no unsaved changes', app.text() == 'start\n' and app.status() == 'No changes', (app.text(), app.status()))
+        ok('Undo greyed out at the start, Redo not', app.ev("document.getElementById('undoBtn').disabled && !document.getElementById('redoBtn').disabled"))
+        app.page.keyboard.press('Control+y'); time.sleep(0.2)
+        ok('Ctrl+Y redoes', app.text() == 'start\none', app.text())
+        app.ev("document.getElementById('redoBtn').click()"); time.sleep(0.2)
+        ok('Redo to the end, then greyed out', app.text() == 'start\none two' and app.ev("document.getElementById('redoBtn').disabled"))
+        app.page.keyboard.press('Control+Shift+Z'); app.page.keyboard.press('Control+z'); time.sleep(0.2)
+        app.page.keyboard.type('!'); time.sleep(0.2)
+        ok('typing after Undo: what was undone cannot be redone any more', app.text() == 'start\none!' and
+           app.ev("document.getElementById('redoBtn').disabled"), app.text())
+        ok('the edit history panel is hidden unless chosen', app.ev("document.getElementById('historyPanel').hidden"))
+        app.side('history'); time.sleep(0.4)
+        steps = app.ev("[...document.querySelectorAll('#historyList .history-what')].map(e => e.textContent)")
+        ok('Edit history: the steps, newest first', steps == ['Typed “!”', 'Typed “one”', 'Opened'], steps)
+        ok('only one side panel at a time', app.ev("document.getElementById('notesPanel').hidden"))
+        app.ev("[...document.querySelectorAll('#historyList .history-step')].pop().click()"); time.sleep(0.4)
+        ok('clicking a step goes back to it; the later ones stay listed, greyed', app.text() == 'start\n' and
+           app.ev("document.querySelectorAll('#historyList .history-step.undone').length") == 2, app.text())
+        app.ev("document.querySelectorAll('#historyList .history-step')[0].click()"); time.sleep(0.4)
+        ok('and forward again', app.text() == 'start\none!')
+        app.side('off')
+        ok('Side panel Off hides it', app.ev("document.getElementById('historyPanel').hidden"))
+        time.sleep(1.0)
+        ok('the history is not stored anywhere', not any('hist' in n for n in data_names()), data_names())
+        app.close()
+        app = App(fresh_ctx(), '/alice/u.txt')     # autosave is off: the change above was kept as a draft
+        app.click_banner('Restore them'); time.sleep(0.4)
+        ok('a restored draft', app.text() == 'start\none!', app.text())
+        app.ev("document.getElementById('undoBtn').click()"); time.sleep(0.3)
+        ok('can be undone like typing', app.text() == 'start\n', app.text())
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+        mock('/mock/data?name=settings.json', 'PUT', json.dumps({'autoSave': 0, 'showNotes': True}).encode())   # as 1.2.0 saved it
+        app = App(fresh_ctx(), '/alice/u.txt')
+        ok('upgrade from 1.2.0: the notes panel that was on stays on', app.ev("document.getElementById('sidePanelSelect').value") == 'notes' and
+           not app.ev("document.getElementById('notesPanel').hidden"))
         app.close()
 
         browser.close()

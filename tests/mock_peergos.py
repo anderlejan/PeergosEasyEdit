@@ -203,6 +203,14 @@ class Handler(BaseHTTPRequestHandler):
             if method == 'POST' and q.get('type', [''])[0] == 'directory':
                 FOLDERS.add(full)
                 return self.send(201)
+            if method == 'POST' and q.get('action', [''])[0] == 'rename':   # the new name is the body
+                name = body.decode('utf-8')
+                target = full.rsplit('/', 1)[0] + '/' + name
+                # Peergos 1.40 answers 400 for a missing file and for a name that is taken, and changes nothing
+                if full not in FILES or '/' in name or target in FILES or target in FOLDERS:
+                    return self.send(400)
+                FILES[target] = FILES.pop(full)
+                return self.send(201)
             if method == 'DELETE':
                 FILES.pop(full, None)
                 return self.send(204)
