@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 Fixed
 - Without tabs, more than one file could stay open: switching tabs off only hid the tab bar. It now closes all but
   the file shown, asking about each one with unsaved changes (cancel keeps tabs on).
