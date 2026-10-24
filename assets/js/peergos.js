@@ -170,6 +170,20 @@ const Peergos = (() => {
       throw new HttpError(res.status, 'Creating the folder');
   }
 
+  // A link that starts the editor in Peergos without choosing a file: the Launcher always asks for one for apps
+  // that open file types (web-ui sandbox mixin registerApp: openFile), a Peergos address does not. The app runs at
+  // <app subdomain>.<Peergos host> (web-ui AppSandbox.vue frameDomain), so Peergos' own address is the host
+  // without its first label; the fragment is encoded as Peergos encodes it (propsToFragment in gwt.js).
+  // null when it cannot be told (outside Peergos, or a host that is an IP address).
+  function startLink(loc, user) {
+    const host = loc.hostname;
+    if (!user || !host.includes('.') || /^[\d.]+$/.test(host) || host.startsWith('['))
+      return null;
+    const main = host.substring(host.indexOf('.') + 1) + (loc.port ? ':' + loc.port : '');
+    const props = {app: 'peergoseasyedit', path: '/' + user, args: {filename: ''}};
+    return loc.protocol + '//' + main + '/#' + encodeURI(JSON.stringify(props)).split(',').join('%2c');
+  }
+
   // Renames a file or folder in a granted folder; the new name is the body (Peergos 1.40, web-ui AppSandbox.vue:
   // POST ...?action=rename answers 201). Not in the Peergos book yet.
   async function renameGranted(grantId, rel, newName) {
@@ -242,7 +256,7 @@ const Peergos = (() => {
 
   return {inPeergos, params, filePathFromAddress, queryEncode, fileUrl, grantUrl, sendablePath,
           readUrl, writeUrl, readFile, writeFile, saveAs, grants, askForFolders, revokeGrant, listFolder, makeFolder,
-          renameGranted, pickFile, readData, writeData, deleteData, HttpError, TimeoutError};
+          renameGranted, pickFile, startLink, readData, writeData, deleteData, HttpError, TimeoutError};
 })();
 
 if (typeof module !== 'undefined')

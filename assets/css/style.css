@@ -55,7 +55,8 @@ kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
 .doc-name { font-weight: 600; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-name.dirty::before { content: "● "; color: var(--warn-fg, #b07000); }
 .group { display: inline-flex; align-items: center; gap: 3px; }
-.size-label { min-width: 2ch; text-align: center; }
+.size-input { width: 4.2em; padding: 2px 4px; text-align: center; background: var(--panel); border: 1px solid var(--line);
+              border-radius: 4px; }
 .check { cursor: pointer; }
 .status { white-space: nowrap; }
 .status.ok { color: var(--ok); }
@@ -145,6 +146,8 @@ section h3 { margin: .4em 0; }
 .start-panel h2 { margin: 0 0 10px; font-size: 1.3em; }
 .start-panel h3 { margin: 18px 0 6px; font-size: 1em; }
 .start-buttons { display: flex; gap: 8px; }
+.start-link { display: flex; gap: 6px; }
+.start-link input { flex: 1; min-width: 0; padding: 3px 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
 
 /* recent files and drafts */
 .recent-list { display: flex; flex-direction: column; gap: 2px; }

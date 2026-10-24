@@ -16,7 +16,8 @@ A simple text editor as a [Peergos](https://peergos.org) custom app, for the tex
   with Peergos' file picker.
 - **Undo and redo** (also Ctrl+Z, Ctrl+Y), with an optional **Edit history** panel to go back to any step; kept
   only while the file is open.
-- Starts from the Peergos launcher as you left it, on any device: your tabs, your one file, or the start screen.
+- A start link (to bookmark) opens the editor as you left it, on any device: your tabs, your one file, or the
+  start screen. (Peergos' Launcher asks for a file first for apps that open text files.)
   One file at a time, or optional **tabs**; **recent files** (how many is up to you), with files that are gone
   marked as such.
 - UTF-8 text; Windows line endings and the byte order mark are kept; files in other encodings open read-only.
@@ -36,7 +37,8 @@ Peergos (the Peergos sandbox would block them anyway).
 2. In Peergos, upload the ZIP to your drive and click it to open it (Peergos shows what is inside).
 3. Open the menu (⋮) of `peergos-app.json` → **Install** → confirm. Installing a newer version over an older one
    keeps your notes and settings.
-4. Open a text file from your drive with PeergosEasyEdit, or start it from the Peergos app launcher.
+4. Open a text file from your drive with PeergosEasyEdit, or start it from the Peergos app launcher (Peergos asks
+   for a file first). To start it without a file, bookmark the link in **Options → Start link…**.
 
 Updating from 1.1.0: unsaved texts that 1.1.0 kept in the browser are moved to drafts in Peergos on the first
 start, then deleted from the browser.

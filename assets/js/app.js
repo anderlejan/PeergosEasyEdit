@@ -7,13 +7,15 @@
 const AUTOSAVE_CHOICES = [0, 2, 5, 10, 30];   // seconds after the last change; 0 = off
 const RECENT_CHOICES = [0, 5, 10, 20];
 const UI_SIZES = [12, 13, 14, 15, 16, 18, 20];   // px: menus, buttons, dialogs - not the text being edited
+const UI_SIZE_RANGE = [10, 32];                   // any whole number in it can be typed in (Custom…)
+const FONT_SIZE_RANGE = [6, 96];                  // the text being edited
 const SIDE_PANELS = ['off', 'notes', 'history'];
 const $ = id => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
                           fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace",
                           autoSave: 5, lineNumbers: false, sidePanel: 'off', tabs: false, recent: 10, drafts: true,
-                          uiSize: 14};
+                          uiSize: 14, history: true};
 const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
                 'blue', 'high-contrast'];
 
@@ -158,9 +160,9 @@ function refreshState() {
   $('saveAsBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.saving;
   $('closeMenuItem').disabled = !doc;
   $('renameMenuItem').disabled = !doc || !doc.loaded || doc.saving || doc.renaming || doc.restoreOpen;
-  const editable = !!doc && doc.loaded && !doc.readOnly && !doc.restoreOpen && !!doc.history;
-  $('undoBtn').disabled = !editable || !doc.history.canUndo;
-  $('redoBtn').disabled = !editable || !doc.history.canRedo;
+  const editable = canEdit(doc);
+  $('undoBtn').disabled = !editable || (!!doc.history && !doc.history.canUndo);
+  $('redoBtn').disabled = !editable || (!!doc.history && !doc.history.canRedo);
   const name = $('docName');
   name.textContent = doc ? doc.name : 'PeergosEasyEdit';
   name.title = doc ? Loc.folder(doc.lasting || doc.loc) : '';
@@ -240,13 +242,13 @@ function addDoc(doc) {
   });
   // the editor's own undo and redo, also from the browser's context menu
   doc.area.addEventListener('beforeinput', e => {
-    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+    if (doc.history && (e.inputType === 'historyUndo' || e.inputType === 'historyRedo')) {
       e.preventDefault();
       if (e.inputType === 'historyUndo') undo(); else redo();
     }
   });
   doc.area.addEventListener('keydown', e => {
-    if (!(e.ctrlKey || e.metaKey) || e.altKey)
+    if (!doc.history || !(e.ctrlKey || e.metaKey) || e.altKey)
       return;
     const k = e.key.toLowerCase();
     if (k === 'z' || k === 'y') {
@@ -382,9 +384,32 @@ function applyHistory(doc, state) {
     LineNumbers.later();
 }
 
-const canEdit = doc => !!doc && doc.loaded && !doc.readOnly && !doc.restoreOpen && !!doc.history;
-const undo = () => canEdit(active) && applyHistory(active, active.history.undo());
-const redo = () => canEdit(active) && applyHistory(active, active.history.redo());
+const canEdit = doc => !!doc && doc.loaded && !doc.readOnly && !doc.restoreOpen;
+
+// With the edit history off (Options), the browser's own undo of the text box is used.
+function browserUndo(doc, command) {
+  doc.area.focus();
+  document.execCommand(command);
+}
+
+function undo() {
+  if (!canEdit(active)) return;
+  if (active.history) applyHistory(active, active.history.undo()); else browserUndo(active, 'undo');
+}
+
+function redo() {
+  if (!canEdit(active)) return;
+  if (active.history) applyHistory(active, active.history.redo()); else browserUndo(active, 'redo');
+}
+
+// Options → Edit history: off drops the steps kept so far; on starts from the text as it is now.
+function setHistory(on) {
+  changeSetting('history', on);
+  for (const d of docs)
+    d.history = on && d.loaded ? new EditHistory(d.area.value) : null;
+  refreshState();
+  EditPanel.render();
+}
 
 // Options → Side panel → Edit history: the steps of the open file, newest first; a click goes back (or forward)
 // to that step. Undone steps stay listed until something new is typed.
@@ -399,7 +424,8 @@ const EditPanel = (() => {
       return;
     const list = $('historyList');
     const h = active && active.history;
-    $('historyMessage').textContent = !active ? 'No file is open.'
+    $('historyMessage').textContent = !settings.history ? 'The edit history is switched off (Options → Edit history).'
+      : !active ? 'No file is open.'
       : !h ? 'The history starts when the file has been opened.'
       : h.dropped ? 'The oldest steps were dropped (the history keeps the last ' + HISTORY_MAX_STEPS + ').' : '';
     $('historyMessage').hidden = !$('historyMessage').textContent;
@@ -606,20 +632,22 @@ async function restoreSession(fromDrive) {
 let settingsChain = Promise.resolve();
 let settingsTimer = null;
 
+const clamp = (n, [min, max]) => Math.min(max, Math.max(min, Math.round(n)));
+
 function cleanSettings(s) {
   const out = Object.assign({}, DEFAULT_SETTINGS);
   if (s && typeof s === 'object') {
     if (THEMES.includes(s.theme)) out.theme = s.theme;
     if (typeof s.wrapLines === 'boolean') out.wrapLines = s.wrapLines;
-    if (Number.isFinite(s.fontSize)) out.fontSize = Math.min(48, Math.max(8, Math.round(s.fontSize)));
+    if (Number.isFinite(s.fontSize)) out.fontSize = clamp(s.fontSize, FONT_SIZE_RANGE);
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
-    for (const k of ['lineNumbers', 'tabs', 'drafts'])
+    for (const k of ['lineNumbers', 'tabs', 'drafts', 'history'])
       if (typeof s[k] === 'boolean') out[k] = s[k];
     if (RECENT_CHOICES.includes(s.recent)) out.recent = s.recent;
     if (SIDE_PANELS.includes(s.sidePanel)) out.sidePanel = s.sidePanel;
     else if (s.showNotes === true) out.sidePanel = 'notes';      // 1.2.0 and older
-    if (UI_SIZES.includes(s.uiSize)) out.uiSize = s.uiSize;
+    if (Number.isFinite(s.uiSize)) out.uiSize = clamp(s.uiSize, UI_SIZE_RANGE);
   }
   return out;
 }
@@ -634,7 +662,8 @@ function applySettings() {
   document.body.className = 'theme-' + settings.theme;
   $('themeSelect').value = settings.theme;
   $('wrapCheck').checked = settings.wrapLines;
-  $('fontSizeLabel').textContent = settings.fontSize;
+  $('fontSizeInput').value = settings.fontSize;
+  $('historyCheck').checked = settings.history;
   if (![...$('fontSelect').options].some(o => o.value === settings.fontFamily))
     $('fontSelect').append(el('option', {value: settings.fontFamily, textContent: settings.fontFamily}));
   $('fontSelect').value = settings.fontFamily;
@@ -646,7 +675,10 @@ function applySettings() {
   $('notesPanel').hidden = settings.sidePanel !== 'notes';
   $('historyPanel').hidden = settings.sidePanel !== 'history';
   $('sidePanelSelect').value = settings.sidePanel;
-  $('uiSizeSelect').value = String(settings.uiSize);
+  const ui = $('uiSizeSelect');
+  if (![...ui.options].some(o => o.value === String(settings.uiSize)))   // a size typed in earlier
+    ui.insertBefore(el('option', {value: String(settings.uiSize), textContent: settings.uiSize + ' (custom)'}), $('uiSizeCustom'));
+  ui.value = String(settings.uiSize);
   document.documentElement.style.setProperty('--ui-size', settings.uiSize + 'px');
   EditPanel.render();
   for (const d of docs)
@@ -1050,13 +1082,30 @@ function wire() {
   };
   $('fontBiggerBtn').onclick = () => changeSetting('fontSize', settings.fontSize + 2);
   $('fontSmallerBtn').onclick = () => changeSetting('fontSize', settings.fontSize - 2);
+  $('fontSizeInput').onchange = e => {
+    const n = Number(e.target.value);
+    if (Number.isFinite(n) && e.target.value.trim() !== '')
+      changeSetting('fontSize', n);
+    else
+      e.target.value = settings.fontSize;
+  };
+  $('historyCheck').onchange = e => setHistory(e.target.checked);
 
   $('sidePanelSelect').onchange = e => {
     changeSetting('sidePanel', e.target.value);
     LineNumbers.later();   // the editor's width changed
   };
-  $('uiSizeSelect').onchange = e => {
-    changeSetting('uiSize', Number(e.target.value));
+  $('uiSizeSelect').onchange = async e => {
+    if (e.target.value === 'custom') {
+      e.target.value = String(settings.uiSize);
+      const answer = await askText('Interface size in pixels (' + UI_SIZE_RANGE.join('–') + '):', String(settings.uiSize));
+      const n = Number(answer);
+      if (answer === null || answer.trim() === '' || !Number.isFinite(n))
+        return;
+      changeSetting('uiSize', n);
+    } else {
+      changeSetting('uiSize', Number(e.target.value));
+    }
     LineNumbers.later();
   };
   $('undoBtn').onclick = undo;
@@ -1072,6 +1121,17 @@ function wire() {
   $('promptCancel').onclick = () => $('promptDialog').close('cancel');
   $('backupBtn').onclick = () => $('backupDialog').showModal();
   $('helpBtn').onclick = () => $('helpDialog').showModal();
+  const link = Peergos.startLink(location, Peergos.params.get('username'));
+  $('startLinkText').value = link || '';
+  $('startLinkRow').hidden = !link;
+  $('startLinkMissing').hidden = !!link;
+  $('copyStartLinkBtn').onclick = () => copyText(link, 'Start link');
+  $('startLinkBtn').onclick = () => {
+    $('helpDialog').showModal();
+    $('startLinkHelp').scrollIntoView();
+    if (link)
+      $('startLinkText').select();
+  };
   $('aboutBtn').onclick = () => $('aboutDialog').showModal();
   $('exportBtn').onclick = exportData;
   $('copyExportBtn').onclick = copyExport;

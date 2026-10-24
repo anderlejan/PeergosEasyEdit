@@ -60,6 +60,17 @@ for (const name of ['C++ notes.txt', 'a&b.txt', 'x&theme=y.txt', 'pct%41.txt', '
   test('changed path refused: ' + name, () => assert.strictEqual(trusted('/u/docs/' + name).trusted, false));
 test('no path', () => assert.deepStrictEqual(Peergos.filePathFromAddress('?theme=&username=u&pgi=1'), {path: null, trusted: false}));
 
+test('start link from the app\'s address', () => {
+  const at = (protocol, hostname, port) => ({protocol, hostname, port});
+  assert.strictEqual(Peergos.startLink(at('https:', 'bciqabc.peergos.net', ''), 'alice'),
+    'https://peergos.net/#%7B%22app%22:%22peergoseasyedit%22%2c%22path%22:%22/alice%22%2c%22args%22:%7B%22filename%22:%22%22%7D%7D');
+  assert.strictEqual(Peergos.startLink(at('http:', 'bciqabc.localhost', '8777'), 'testuser').split('#')[0], 'http://localhost:8777/');
+  assert.strictEqual(Peergos.startLink(at('http:', '127.0.0.1', '8790'), 'alice'), null);
+  assert.strictEqual(Peergos.startLink(at('https:', 'bciqabc.peergos.net', ''), null), null);
+  const frag = Peergos.startLink(at('https:', 'x.peergos.net', ''), 'a').split('#')[1];
+  assert.deepStrictEqual(JSON.parse(decodeURIComponent(frag)), {app: 'peergoseasyedit', path: '/a', args: {filename: ''}});
+});
+
 /* ---------- undo, redo and the edit history ---------- */
 
 const {EditHistory, editKind} = require(path.join(__dirname, '..', 'assets', 'js', 'history.js'));

@@ -31,7 +31,8 @@
     </span>
     <span class="group" role="group" aria-label="Text size">
       <button type="button" id="fontSmallerBtn" title="Smaller text">A−</button>
-      <span id="fontSizeLabel" class="size-label">14</span>
+      <input type="number" id="fontSizeInput" class="size-input" min="6" max="96" step="1" value="14"
+             title="Text size in pixels (6–96): type a number or use A− A+" aria-label="Text size">
       <button type="button" id="fontBiggerBtn" title="Bigger text">A+</button>
     </span>
     <span id="status" class="status" role="status" aria-live="polite"></span>
@@ -79,6 +80,7 @@
             <option value="16">16</option>
             <option value="18">18</option>
             <option value="20">20</option>
+            <option value="custom" id="uiSizeCustom">Custom…</option>
           </select>
         </label>
         <label title="Save by itself this long after the last change (and at least every 30 s while typing)">Autosave
@@ -102,6 +104,8 @@
           <input type="checkbox" id="tabsCheck"> Tabs</label>
         <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
         <label class="check"><input type="checkbox" id="lineNumbersCheck"> Line numbers</label>
+        <label class="check" title="Keep the steps of editing each open file, for Undo, Redo and the Edit history panel (in memory only, never stored). Off: Undo and Redo use the browser's own undo.">
+          <input type="checkbox" id="historyCheck"> Edit history</label>
         <label title="A panel on the right: your notes, or the steps of editing the open file">Side panel
           <select id="sidePanelSelect">
             <option value="off">Off</option>
@@ -111,6 +115,7 @@
         </label>
         <hr>
         <button type="button" id="backupBtn">Backup…</button>
+        <button type="button" id="startLinkBtn" title="A link to bookmark: starts the editor without choosing a file">Start link…</button>
         <button type="button" id="helpBtn">Help…</button>
         <button type="button" id="aboutBtn">About…</button>
       </div>
@@ -269,10 +274,20 @@
       <div class="dialog-title"><h2>Help</h2><button type="button" class="close" data-close>Close</button></div>
       <div class="prose">
         <h3>Opening a file</h3>
-        <p>Open a text file from your Peergos Drive with PeergosEasyEdit, or start the editor from the launcher and
-          use <b>File → Open…</b>. Started from the launcher, the editor comes back as you left it, on any device:
-          with your tabs, with the one file you had open, or – if you closed everything – with <b>New text</b>,
-          <b>Open…</b>, your recent files and any unsaved texts kept in Peergos.</p>
+        <p>Open a text file from your Peergos Drive with PeergosEasyEdit, or use <b>File → Open…</b> in the editor.
+          Peergos' Launcher always asks you to choose a file first (Peergos does this for every app that opens text
+          files); the editor then opens it – with tabs on, next to your other tabs.</p>
+        <h3 id="startLinkHelp">Starting without a file</h3>
+        <p>To start the editor without choosing a file, bookmark this link and open it while Peergos shows the
+          Launcher (or your home folder in the Drive), instead of clicking the editor's tile. Peergos 1.40 ignores it
+          while the Drive shows another folder, and in a new tab it asks you to sign in first. The editor then comes
+          back as you left it, on any device: with your tabs, with the one file you had open, or –
+          if you closed everything – with <b>New text</b>, <b>Open…</b>, your recent files and any unsaved texts kept
+          in Peergos.</p>
+        <p class="start-link" id="startLinkRow"><input type="text" id="startLinkText" readonly aria-label="Start link">
+          <button type="button" id="copyStartLinkBtn">Copy</button></p>
+        <p id="startLinkMissing" hidden>The editor cannot tell your Peergos address here. The link is your Peergos
+          address followed by <code>/#{"app":"peergoseasyedit","path":"/</code><i>your user name</i><code>","args":{"filename":""}}</code>.</p>
         <h3>Granted folders</h3>
         <p><b>Open…</b> and <b>Save as…</b> browse the folders you let the editor use. Choose <b>+ Add
           folders…</b>: Peergos asks which folders. Peergos remembers them on every device until you remove them

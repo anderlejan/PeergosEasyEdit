@@ -4,9 +4,9 @@
 Fixed
 - Without tabs, more than one file could stay open: switching tabs off only hid the tab bar. It now closes all but
   the file shown, asking about each one with unsaved changes (cancel keeps tabs on).
-- Started from the launcher without tabs, the editor did not come back with the file left open. It now comes back
-  as it was left in both modes: the tabs, the one file, or the start screen when everything was closed. Opened on
-  a file from the Drive without tabs, it shows just that file.
+- Started without a file, the editor did not come back with the file left open when tabs were off. It now comes
+  back as it was left in both modes: the tabs, the one file, or the start screen when everything was closed.
+  Opened on a file (from the Drive or the Launcher's file choice) without tabs, it shows just that file.
 
 Added
 - **Undo** and **Redo** buttons (also Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z); typing without a pause is one step, and a
@@ -15,7 +15,13 @@ Added
   goes back (or forward) to a step. Kept only while the file is open, never stored.
 - **File → Rename…**: renames the file in Peergos (in granted folders) and shows the new name at once; a new text
   gets the name it will be saved under.
-- **Options → Interface size** for menus, buttons and windows, separate from the size of the text (A− A+).
+- **Start link** (Options → Start link…, also in Help): a link to bookmark that starts the editor without choosing a
+  file. Peergos' Launcher always asks for a file first for apps that open text files, and the editor keeps being
+  offered for text files in the Drive.
+- **Options → Interface size** for menus, buttons and windows (Custom… takes any size from 10 to 32), separate from
+  the size of the text, which can now be typed in next to A− A+ (6 to 96).
+- **Options → Edit history** switches the editor's own undo history off (default on); Undo and Redo then use the
+  browser's.
 - Closing a tab in the background that has unsaved changes shows it before asking.
 
 Changed

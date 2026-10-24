@@ -9,14 +9,15 @@ stored on the server, read with PG.java through the Peergos Java API - not throu
 Server, user, password and jar come from the environment or .env (see .env.example): PEERGOS_URL,
 PEERGOS_TEST_USER, PEERGOS_TEST_PASSWORD, PEERGOS_JAR.
 
-Scenarios: v13 (1.3.0: rename through a granted folder, undo and redo with real typing, the edit history, the
+Scenarios: launcher (a click on the app's tile in the Launcher, and the start link from Help), openwith (the apps
+the Drive offers for a text file), v13 (1.3.0: rename through a granted folder, undo and redo with real typing, the edit history, the
 interface size, single mode back as left from the launcher), v12 (1.2.0: Open through a granted folder, Save as into a new folder, tabs, a draft, reopen from the
 launcher with the tabs back, nothing on the device), control (open, edit, save), autosave (no Save pressed, also after a worker stop), sw-stop (stop the sandbox service worker - what the browser does when
 idle - then save), names (file names with + and &), stale (file changed elsewhere, read again), upgrade
 (version, notes, settings after installing over an older version), pct (a name with % - Peergos cannot open it).
 Setup: see tests/README.md.
 """
-import argparse, os, subprocess, sys, tempfile, time
+import argparse, json, os, subprocess, sys, tempfile, time
 from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -340,6 +341,45 @@ def main():
                 after = server_text(path)
                 print('  server file now: %r -> %s' % (after, 'SAVED' if after == new_text else 'NOT SAVED'), flush=True)
                 close_app(page)
+
+        if A.scenario == 'openwith':   # which apps the Drive offers for a text file
+            drive(page)
+            page.evaluate("p => window.__drive.changePath(p)", '/%s/docs' % USER)
+            wait(lambda: page.evaluate("n => !window.__drive.showSpinner && window.__drive.files.some(f => f.getName() === n)", 'notes.txt'), 'notes.txt', 120)
+            print('Drive offers for notes.txt:', page.evaluate("() => { const f = window.__drive.files.find(f => f.getName() === 'notes.txt'); return window.__drive.availableAppsForFile(f).map(a => a.name); }"), flush=True)
+
+        if A.scenario == 'launcher':   # what a click on the app's tile in the Launcher really does, and a link
+            os.makedirs(A.shots, exist_ok=True)
+            for _ in range(5):
+                if page.evaluate("() => { const c = " + VUE + ".find('launchAppFromUI'); if (c) { window.__launcher = c; return true; } return false; }"):
+                    break
+                page.evaluate("() => { const b = [...document.querySelectorAll('button, a')].find(x => ['Launcher', 'Apps'].includes(x.textContent.trim())); if (b) b.click(); }")
+                time.sleep(2)
+            wait(lambda: page.evaluate("n => { const c = window.__launcher; return c && !c.showSpinner && JSON.stringify(c.appsList || []).includes(n); }", APP), 'launcher apps', 120)
+            entry = page.evaluate("n => { const a = (window.__launcher.appsList || []).find(x => x.name === n); return a && {openFile: a.openFile, createFile: a.createFile, folderAction: a.folderAction, launchable: a.launchable}; }", APP)
+            print('Peergos registered the app as:', entry, flush=True)
+            page.evaluate("n => [...document.querySelectorAll('.app-grid-item')].find(a => (a.getAttribute('aria-label') || a.textContent).includes(n)).click()", A.display)
+            time.sleep(8)
+            picker = page.evaluate("() => !!(window.__launcher.showFilePicker || window.__launcher.showNewFilePicker || window.__launcher.showFolderPicker)")
+            fr = app_frame(page)
+            print('click on the tile: Peergos file picker shown:', picker, '| editor started:', bool(fr), flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'launcher-click.png'))
+            if fr:
+                print('  editor state:', fr.evaluate("({open: docs.map(d => d.name), start: !document.getElementById('startPanel').hidden, url: location.search})"), flush=True)
+                close_app(page)
+            if picker:
+                page.evaluate("() => { const c = window.__launcher; c.showFilePicker = false; c.showNewFilePicker = false; c.showFolderPicker = false; }")
+            f = open_file(page, '/%s/docs' % USER, 'notes.txt')
+            link = f.evaluate("document.getElementById('startLinkText').value")      # as the editor's Help shows it
+            print('start link shown in Help:', link, '| Options has Start link…:', f.evaluate("!!document.getElementById('startLinkBtn')"), flush=True)
+            close_app(page)
+            page.goto(link)
+            time.sleep(12)
+            fr = app_frame(page)
+            print('link', link, '-> editor started:', bool(fr), flush=True)
+            if fr:
+                print('  editor state:', fr.evaluate("({open: docs.map(d => d.name), start: !document.getElementById('startPanel').hidden, url: location.search})"), flush=True)
+            page.screenshot(path=os.path.join(A.shots, 'launcher-link.png'))
 
         if A.scenario == 'v13':
             os.makedirs(A.shots, exist_ok=True)

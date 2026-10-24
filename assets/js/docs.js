@@ -93,7 +93,7 @@ const Docs = (() => {
     if (doc.loc.kind === 'new') {
       doc.loaded = true;
       doc.state = 'ready';
-      doc.history = new EditHistory(doc.area.value);
+      doc.history = App.settings.history ? new EditHistory(doc.area.value) : null;
       App.changed(doc);
       return;
     }
@@ -117,7 +117,7 @@ const Docs = (() => {
     doc.savedHash = await TextCodec.sha256(bytes);
     doc.loaded = true;
     doc.state = 'ready';
-    doc.history = new EditHistory(doc.area.value);
+    doc.history = App.settings.history ? new EditHistory(doc.area.value) : null;
     if (!decoded.ok) {
       doc.readOnly = true;
       doc.canSave = false;
