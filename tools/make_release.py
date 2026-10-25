@@ -17,6 +17,8 @@ so the build refuses empty folders. The app creates its notes and settings files
 A released version is never overwritten: the script refuses when its files exist. Fix → bump the version.
 A release takes the app files from the commit, not from the disk, and refuses when the disk differs (a Windows checkout
 can hold CRLF line endings that `git status` does not show), so the ZIP is reproducible from the tag.
+Third-party files (assets/vendor/: Toast UI Editor, KaTeX) are not in git: tools/fetch_vendor.py fetches them and checks
+each against the SHA-256 pinned in tools/vendor.json, so they too are the same in every build.
 """
 import hashlib, json, os, re, shutil, subprocess, sys, zipfile
 
@@ -86,7 +88,8 @@ def check_tree():
         if not dirs and not files:
             empty.append(os.path.relpath(base, ROOT))
         for fn in files:
-            if not fn.endswith(('.js', '.css', '.html')):
+            # third-party code (pinned) names web addresses in its own texts; the sandbox's CSP blocks any request
+            if not fn.endswith(('.js', '.css', '.html')) or is_vendor(os.path.relpath(os.path.join(base, fn), ROOT)):
                 continue
             p = os.path.join(base, fn)
             text = open(p, encoding='utf-8').read()
@@ -115,6 +118,17 @@ def run_tests():
                     die('syntax error in ' + f + ':\n' + r.stderr)
 
 
+def is_vendor(rel):
+    return rel.replace(os.sep, '/').startswith('assets/vendor/')
+
+
+def fetch_vendor():
+    r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'fetch_vendor.py')], capture_output=True, text=True)
+    print(r.stdout.strip())
+    if r.returncode != 0:
+        die('third-party files:\n' + r.stdout + r.stderr)
+
+
 def app_files():
     files = ['peergos-app.json']
     for base, dirs, fs in os.walk(os.path.join(ROOT, 'assets')):
@@ -135,6 +149,12 @@ def read_commit(commit):
         return subprocess.run(['git', '-C', ROOT, 'cat-file', 'blob', '%s:%s' % (commit, rel)],
                               capture_output=True, check=True).stdout
     return read
+
+
+def read_release(commit):
+    """The app's own files from the commit; the pinned third-party files (not in git) from the disk."""
+    from_commit = read_commit(commit)
+    return lambda rel: read_disk(rel) if is_vendor(rel) else from_commit(rel)
 
 
 def check_disk_matches(files, read):
@@ -190,6 +210,7 @@ def main():
     m = check_manifest()
     ver = m['version']
     check_version(ver)
+    fetch_vendor()
     check_tree()
     if '--skip-tests' not in ARGS:
         run_tests()
@@ -208,11 +229,11 @@ def main():
         return
     commit = git('rev-parse', 'HEAD').strip()
     committed = set(git('ls-tree', '-r', '--name-only', commit).split('\n'))
-    untracked = [f for f in files if f not in committed]
+    untracked = [f for f in files if f not in committed and not is_vendor(f)]
     if untracked:
         die('files in the app that are not committed: ' + ', '.join(untracked))
-    read = read_commit(commit)
-    check_disk_matches(files, read)
+    read = read_release(commit)
+    check_disk_matches([f for f in files if not is_vendor(f)], read)
     if git('status', '--porcelain').strip():
         die('uncommitted changes – commit first (a release is built from a commit)')
     tag = 'v' + ver

@@ -553,6 +553,9 @@ def main():
         app.close()
         app = App(ctx7, None)
         ok('single mode, launcher start: the file left open comes back', app.text() == 'edited copy\n' and app.tabs() == [], (app.text(), app.tabs()))
+        ok('single mode: no tab bar, a × next to the file name in the bar', app.ev("document.getElementById('tabs').hidden") and
+           not app.ev("document.getElementById('closeDocBtn').hidden") and
+           app.ev("document.getElementById('closeDocBtn').getBoundingClientRect().top < document.getElementById('docName').getBoundingClientRect().bottom"))
         app.menu('closeMenuItem'); time.sleep(1.2)
         app.close()
         app = App(ctx7, None)
@@ -855,6 +858,353 @@ def main():
         app.ev("document.getElementById('helpDialog').close()")
         ok('no script errors', not app.errors, app.errors)
         app.close()
+
+        print('15. side panel buttons and width, wheel on the text size, recent files submenu, import and export', flush=True)
+        reset()
+        grant('/alice/In')
+        put_file('/alice/w.txt', b'first\r\nsecond\r\n')
+        app = App(fresh_ctx(), '/alice/w.txt')
+        shown = lambda: [p for p in ('notesPanel', 'historyPanel') if not app.ev("id => document.getElementById(id).hidden", p)]
+        pressed = lambda: [b for b in ('notesPanelBtn', 'historyPanelBtn') if app.ev("id => document.getElementById(id).getAttribute('aria-pressed')", b) == 'true']
+        ok('panel buttons in the bar by default, no panel', app.ev("!document.getElementById('panelButtons').hidden") and shown() == [] and pressed() == [])
+        app.page.click('#notesPanelBtn'); time.sleep(0.2)
+        ok('Notes button shows the notes', shown() == ['notesPanel'] and pressed() == ['notesPanelBtn'] and
+           app.ev("document.getElementById('sidePanelSelect').value") == 'notes')
+        app.page.click('#historyPanelBtn'); time.sleep(0.2)
+        ok('History button switches to the edit history', shown() == ['historyPanel'] and pressed() == ['historyPanelBtn'])
+        app.page.click('#historyPanelBtn'); time.sleep(0.2)
+        ok('clicking the lit button again: panel off', shown() == [] and pressed() == [] and app.ev("document.getElementById('panelHandle').hidden"))
+        app.page.click('#notesPanelBtn'); time.sleep(0.2)
+        panel_w = lambda: app.ev("document.getElementById('notesPanel').getBoundingClientRect().width")
+        w0 = panel_w()
+        box = app.page.locator('#panelHandle').bounding_box()
+        x, y = box['x'] + box['width'] / 2, box['y'] + 100
+        app.page.mouse.move(x, y); app.page.mouse.down(); app.page.mouse.move(x - 60, y, steps=4); app.page.mouse.move(x - 120, y, steps=4)
+        app.page.mouse.up(); time.sleep(1.0)
+        w1 = panel_w()
+        ok('dragging the panel edge to the left widens it', abs(w1 - (w0 + 120)) < 3, (w0, w1))
+        ok('the width is saved in Peergos', abs(data_json('settings.json').get('panelWidth', 0) - w1) < 2, data_json('settings.json'))
+        app.page.click('#historyPanelBtn'); time.sleep(0.2)
+        ok('the other panel has the same width', abs(app.ev("document.getElementById('historyPanel').getBoundingClientRect().width") - w1) < 2)
+        app.page.focus('#panelHandle'); app.page.keyboard.press('ArrowRight'); time.sleep(0.2)
+        ok('→ on the edge makes it narrower', abs(app.ev("document.getElementById('historyPanel').getBoundingClientRect().width") - (w1 - 20)) < 3)
+        app.page.mouse.move(x - 120 + 20, y); app.page.mouse.down(); app.page.mouse.move(x + 3000, y, steps=4); app.page.mouse.up(); time.sleep(0.3)
+        ok('not narrower than 160 px', abs(app.ev("document.getElementById('historyPanel').getBoundingClientRect().width") - 160) < 2)
+        app.page.dblclick('#panelHandle'); time.sleep(1.0)
+        ok('double-click: normal width again', abs(app.ev("document.getElementById('historyPanel').getBoundingClientRect().width") - w0) < 2 and
+           data_json('settings.json')['panelWidth'] == 0, data_json('settings.json'))
+        app.ev("const c = document.getElementById('panelButtonsCheck'); c.checked = false; c.dispatchEvent(new Event('change'))"); time.sleep(1.0)
+        ok('Options → Side panel buttons off hides them, saved', app.ev("document.getElementById('panelButtons').hidden") and
+           data_json('settings.json')['panelButtons'] is False)
+
+        editor_px = lambda: app.ev("getComputedStyle(document.getElementById('editor')).fontSize")
+        box = app.page.locator('#fontSizeInput').bounding_box()
+        app.page.mouse.move(box['x'] + 5, box['y'] + 5)
+        app.page.mouse.wheel(0, -100); time.sleep(0.2); app.page.mouse.wheel(0, -100); time.sleep(0.2)
+        ok('wheel up over the text size: 2 notches = 2 px bigger', editor_px() == '16px' and app.ev("document.getElementById('fontSizeInput').value") == '16', editor_px())
+        box = app.page.locator('#fontSmallerBtn').bounding_box()
+        app.page.mouse.move(box['x'] + 5, box['y'] + 5)
+        for _ in range(4):
+            app.page.mouse.wheel(0, 30); time.sleep(0.1)
+        ok('touchpad: small movements add up (120 px down = 2 steps)', editor_px() == '14px', editor_px())
+        scroll_before = app.ev("document.scrollingElement.scrollTop")
+        ok('the page does not scroll meanwhile', scroll_before == 0)
+        time.sleep(1.0)
+        ok('the size from the wheel is saved', data_json('settings.json')['fontSize'] == 14)
+
+        app.page.click('#fileMenuBtn'); time.sleep(0.2)
+        ok('recent files are in a submenu, closed at first', app.ev("document.getElementById('recentSubmenu').hidden") and
+           app.ev("document.getElementById('fileMenu').contains(document.getElementById('recentMenuBtn'))"))
+        app.page.hover('#recentMenuBtn'); time.sleep(0.2)
+        ok('pointing at Recent files opens it beside the menu', not app.ev("document.getElementById('recentSubmenu').hidden") and
+           app.ev("document.getElementById('recentSubmenu').getBoundingClientRect().left >= document.getElementById('fileMenu').getBoundingClientRect().right - 2"))
+        ok('it lists the recent file', app.ev("[...document.querySelectorAll('#recentMenu .recent-name')].map(e => e.textContent)") == ['w.txt'])
+        app.page.click('#recentMenuBtn'); time.sleep(0.2)
+        ok('a click keeps both open', not app.ev("document.getElementById('recentSubmenu').hidden") and not app.ev("document.getElementById('fileMenu').hidden"))
+        box = app.page.locator('#recentMenuBtn').bounding_box()
+        app.page.mouse.move(box['x'] + box['width'] - 3, box['y'] + 8)
+        app.page.mouse.move(box['x'] + box['width'] + 4, box['y'] + 8); time.sleep(0.1)   # the gap between the menus
+        sub = app.page.locator('#recentSubmenu').bounding_box()
+        app.page.mouse.move(sub['x'] + 20, sub['y'] + 12); time.sleep(0.5)
+        ok('the pointer can cross the gap into the submenu', not app.ev("document.getElementById('recentSubmenu').hidden"))
+        app.page.hover('#newMenuItem'); time.sleep(0.5)
+        ok('pointing elsewhere closes it', app.ev("document.getElementById('recentSubmenu').hidden"))
+        app.page.focus('#recentMenuBtn'); app.page.keyboard.press('ArrowRight'); time.sleep(0.2)
+        ok('→ opens it and goes into it', app.ev("document.getElementById('recentSubmenu').contains(document.activeElement)"))
+        app.page.keyboard.press('ArrowLeft'); time.sleep(0.2)
+        ok('← goes back', app.ev("document.getElementById('recentSubmenu').hidden && document.activeElement.id === 'recentMenuBtn'"))
+        app.page.keyboard.press('Escape')
+        ok('Escape closes the menus', app.ev("document.getElementById('fileMenu').hidden && document.getElementById('recentSubmenu').hidden"))
+
+        app.page.click('#fileMenuBtn')
+        app.page.click('#exportMenuItem'); time.sleep(0.3)
+        ok('Export asks for the name first, says where browsers save', app.dialog_open('exportDialog') and
+           app.ev("document.getElementById('exportName').value") == 'w.txt' and
+           'Ask where to save each' in app.ev("document.getElementById('exportDialog').textContent"))
+        app.page.click('#exportCancel'); time.sleep(0.3)
+        ok('Cancel: nothing exported, dialog closed', not app.dialog_open('exportDialog'))
+        app.page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+        app.menu('exportMenuItem')
+        app.page.click('#exportCopy'); time.sleep(0.4)
+        # the system clipboard of Windows gives line breaks back as CR LF
+        ok('Copy text: the whole text on the clipboard, dialog closed', app.ev("navigator.clipboard.readText()").replace('\r\n', '\n') == 'first\nsecond\n' and
+           not app.dialog_open('exportDialog') and 'copied' in app.ev("document.getElementById('toast').textContent"),
+           app.ev("document.getElementById('toast').textContent"))
+        app.menu('exportMenuItem')
+        with app.page.expect_download() as dl:
+            app.page.click('#exportOk')
+        d = dl.value
+        with open(d.path(), 'rb') as f:
+            got = f.read()
+        ok('Export downloads the text under its name, line endings as in the file', d.suggested_filename == 'w.txt' and got == b'first\r\nsecond\r\n', (d.suggested_filename, got))
+        app.type_text('changed, not saved\n')
+        app.menu('exportMenuItem')
+        app.ev("document.getElementById('exportName').value = 'other name.txt'")
+        with app.page.expect_download() as dl:
+            app.page.click('#exportOk')
+        with open(dl.value.path(), 'rb') as f:
+            got = f.read()
+        ok('Export gives what is shown, also unsaved, under the name typed', got == b'changed, not saved\r\n' and
+           dl.value.suggested_filename == 'other name.txt', (got, dl.value.suggested_filename))
+        ok('Export does not change the file in Peergos', server_file('/alice/w.txt') == b'first\r\nsecond\r\n')
+        app.type_text('first\nsecond\n')
+
+        imported = '\ufeffimported line\r\nčeština\r\n'.encode('utf-8')
+        app.page.click('#fileMenuBtn')
+        with app.page.expect_file_chooser() as fc:
+            app.page.click('#importMenuItem')
+        fc.value.set_files(files=[{'name': 'from device.txt', 'mimeType': 'text/plain', 'buffer': imported}])
+        time.sleep(0.8)
+        ok('Import opens it as a new text with the file name', app.text() == 'imported line\nčeština\n' and
+           app.ev("document.getElementById('docName').textContent") == 'from device.txt', app.text())
+        ok('and asks where to save it in Peergos', app.dialog_open('fileDialog') and app.ev("document.getElementById('fdName').value") == 'from device.txt')
+        app.ev("document.querySelector('#fdRoots .fd-root-name').click()"); time.sleep(0.4)
+        app.ev("document.getElementById('fdOk').click()"); time.sleep(1.2)
+        ok('saved into Peergos with its byte order mark and line endings', server_file('/alice/In/from device.txt') == imported,
+           server_file('/alice/In/from device.txt'))
+        ok('then it is an ordinary file', app.status().startswith('Saved ✓') and app.ev("document.getElementById('docName').textContent") == 'from device.txt', app.status())
+        app.ev("document.getElementById('importInput').value = ''")
+        app.page.set_input_files('#importInput', files=[{'name': 'binary.bin', 'mimeType': 'application/octet-stream', 'buffer': b'\xff\xfe\x00bad'}])
+        time.sleep(0.5)
+        ok('not UTF-8: not imported, says why', 'not UTF-8' in app.ev("document.getElementById('toast').textContent") and
+           app.ev("document.getElementById('docName').textContent") == 'from device.txt')
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+        app = App(fresh_ctx(), None)
+        ok('next start: panel width and buttons setting as left', app.ev("document.getElementById('panelButtons').hidden"))
+        ok('the file left open comes back with its × in the bar', app.ev("docs.length") == 1 and not app.ev("document.getElementById('closeDocBtn').hidden"))
+        app.close()
+        put_file('/alice/x.txt', b'x\n')
+        app = App(fresh_ctx(), '/alice/x.txt')
+        app.type_text('x changed\n')
+        app.page.click('#closeDocBtn'); time.sleep(0.4)
+        ok('× in the bar asks about unsaved changes', app.dialog_open('choiceDialog'))
+        app.ev("document.getElementById('choiceDialog').close('cancel')"); time.sleep(0.3)
+        ok('cancelled: still open', app.ev("docs.length") == 1)
+        app.type_text('x\n'); app.page.click('#closeDocBtn'); time.sleep(0.4)
+        ok('× closes the file: start screen, × gone', app.ev("docs.length") == 0 and not app.ev("document.getElementById('startPanel').hidden") and
+           app.ev("document.getElementById('closeDocBtn').hidden"))
+        app.ev("const c = document.getElementById('tabsCheck'); c.checked = true; c.dispatchEvent(new Event('change'))"); time.sleep(0.3)
+        app.ev("document.getElementById('startNew').click()"); time.sleep(0.5)
+        ok('tabs on: the tab has the ×, not the bar', app.ev("document.getElementById('closeDocBtn').hidden") and app.tabs() == ['untitled.txt'])
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+
+        print('16. Markdown: formatted editing that keeps the rest of the file, Source, formatting buttons', flush=True)
+        reset()
+        grant('/alice/Notes')
+        md = ('# Project notes\r\n\r\nSome *emphasis*, __strong__ and `code`. Math $x_1 + y_1$ and a price of $5.\r\n\r\n'
+              'Water is H~2~O, area X^2^, an ~~old~~ word.\r\n\r\n'
+              '1) numbered with paren\r\n2) second\r\n\r\n- [ ] task open\r\n- [x] task done\r\n\r\n| Left | Right |\r\n|:-----|------:|\r\n'
+              '| a | b |\r\n\r\n<span style="color:red">raw html</span> in a line.\r\n\r\n![a dot](pic.png)\r\n\r\n'
+              '[other file](other.md)\r\n\r\nLast paragraph.\r\n')
+        lf = md.replace('\r\n', '\n')
+        png = bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010806000000'
+                            '1f15c4890000000d49444154789c6360f8cfc0f01f0005fe02fea7d4c1a40000000049454e44ae426082')
+        put_file('/alice/Notes/notes.md', md.encode())
+        put_file('/alice/Notes/pic.png', png)
+        put_file('/alice/Notes/other.md', b'# Other\n')
+        put_file('/alice/Notes/plain.txt', b'plain\n')
+        put_file('/alice/Notes/latin.md', '# Café\n\nNot UTF-8.\n'.encode('latin-1'))
+        app = App(fresh_ctx(), None)
+        open_md = lambda rel: app.ev("r => openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: r})", rel)
+        open_md('plain.txt'); time.sleep(0.6)
+        ok('a text file: no Markdown buttons', app.ev("document.getElementById('mdButtons').hidden"))
+        open_md('notes.md')
+        wait(lambda: app.ev("!!document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror[contenteditable=true]')"), 'the formatted editor', 15)
+        time.sleep(1.0)
+        ed = lambda js: app.ev("() => { const r = document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror'); return " + js + "; }")
+        ok('a .md file opens formatted and editable; one button for Source; formatting buttons off by default',
+           app.ev("document.getElementById('editor').hidden") and app.ev("document.getElementById('mdModeBtn').textContent") == 'Source' and
+           app.ev("document.getElementById('mdTools').hidden") and app.status() == 'No changes')
+        ok('formatted: heading, table, task list', ed("r.querySelector('h1').textContent") == 'Project notes' and ed("!!r.querySelector('table')") and
+           ed("r.querySelectorAll('li.task-list-item').length") == 2)
+        ok('math shown with KaTeX, a price is not math', ed("r.querySelectorAll('.pee-math-widget .katex').length") == 1 and
+           'price of $5.' in ed("r.textContent"))
+        ok('H~2~O and X^2^ shown as sub- and superscript, ~~old~~ struck out',
+           ed("[...r.querySelectorAll('.pee-sub')].map(e => e.textContent).join()") == '2' and
+           ed("[...r.querySelectorAll('.pee-sup')].map(e => e.textContent).join()") == '2' and ed("!!r.querySelector('del, s')"))
+        ok('a picture from the granted folder is shown', ed("[...r.querySelectorAll('img')].some(i => i.src.startsWith('blob:'))"))
+        app.page.click('#mdModeBtn'); time.sleep(0.3)
+        ok('Source: the exact text; the button says Formatted', not app.ev("document.getElementById('editor').hidden") and app.text() == lf and
+           app.ev("document.getElementById('mdModeBtn').textContent") == 'Formatted')
+        app.page.click('#mdModeBtn'); time.sleep(0.5)
+        ok('and back to formatted', app.ev("document.getElementById('editor').hidden && !document.querySelector('.md-box').hidden"))
+        app.ev("const c = document.getElementById('mdToolsCheck'); c.checked = true; c.dispatchEvent(new Event('change'))"); time.sleep(1.0)
+        ok('Options → Formatting buttons: in the bar, saved', not app.ev("document.getElementById('mdTools').hidden") and
+           data_json('settings.json')['mdTools'] is True)
+
+        def caret_at_end_of(start):
+            app.ev("""s => { const p = [...document.querySelectorAll('.md-edit .toastui-editor-ww-container .ProseMirror p')].find(x => x.textContent.startsWith(s));
+                const r = document.createRange(); r.selectNodeContents(p); r.collapse(false);
+                const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }""", start)
+
+        def select_in(start, a, b):
+            app.ev("""([s, a, b]) => { const p = [...document.querySelectorAll('.md-edit .toastui-editor-ww-container .ProseMirror p')].find(x => x.textContent.startsWith(s));
+                const t = document.createTreeWalker(p, NodeFilter.SHOW_TEXT).nextNode();
+                const r = document.createRange(); r.setStart(t, a); r.setEnd(t, b);
+                const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }""", [start, a, b])
+        caret_at_end_of('Last')
+        app.page.keyboard.type(' More words.'); time.sleep(0.6)
+        want = lf.replace('Last paragraph.', 'Last paragraph. More words.')
+        ok('typing formatted changes only that paragraph; __strong__, 1), the table and the HTML stay as they were',
+           app.text() == want and app.status() == 'Unsaved changes', app.text())
+        app.save(); app.wait_idle()
+        ok('saved with the file\'s CR LF line endings everywhere', server_file('/alice/Notes/notes.md') == want.replace('\n', '\r\n').encode(),
+           server_file('/alice/Notes/notes.md'))
+        app.page.keyboard.press('Control+z'); time.sleep(0.6)
+        ok('Ctrl+Z in the formatted view: the editor\'s undo, back to the file as it was', app.text() == lf, app.text())
+        app.page.keyboard.press('Control+y'); time.sleep(0.6)
+        ok('Ctrl+Y redoes it', app.text() == want, app.text())
+        select_in('Last', 0, 4)
+        app.page.click('[data-md=bold]'); time.sleep(0.6)
+        ok('B makes the selection bold, only in that paragraph', app.text() == want.replace('Last paragraph.', '**Last** paragraph.'), app.text())
+        select_in('Last', 0, 4)
+        app.page.click('[data-md=strike]'); time.sleep(0.6)
+        ok('S strikes it out (~~), not a subscript', '~~**Last**~~ paragraph.' in app.text() or '**~~Last~~** paragraph.' in app.text(), app.text()[-40:])
+        caret_at_end_of('Some')
+        app.page.keyboard.type(' Typed.'); time.sleep(0.6)
+        ok('editing next to a formula keeps the formula exactly ($x_1 + y_1$, not escaped)',
+           'Math $x_1 + y_1$ and a price of $5. Typed.' in app.text(), app.text()[:140])
+        caret_at_end_of('Water')
+        app.page.keyboard.type(' Again.'); time.sleep(0.6)
+        ok('editing next to H~2~ and X^2^ keeps them', 'Water is H~2~O, area X^2^, an ~~old~~ word. Again.' in app.text(), app.text()[:200])
+        caret_at_end_of('Some')
+        app.page.keyboard.press('End')
+        for _ in range(30):
+            app.page.keyboard.press('ArrowLeft')
+        app.page.keyboard.press('Backspace'); app.page.keyboard.press('Delete'); time.sleep(0.6)
+        ok('a formula is one piece: the caret never ends up inside it, so it is never cut in half',
+           ('$x_1 + y_1$' in app.text()) or ('Math  and' in app.text() or 'Math and' in app.text()), app.text()[:140])
+        app.page.keyboard.press('Control+z'); app.page.keyboard.press('Control+z'); time.sleep(0.6)
+        caret_at_end_of('Last')
+        app.page.keyboard.press('Enter')
+        app.page.click('[data-md=ol]')
+        app.page.keyboard.type('First new step'); app.page.keyboard.press('Enter'); app.page.keyboard.type('Second new step'); time.sleep(0.8)
+        ok('1≡ starts a numbered list: 1. and 2.', app.text().endswith('\n\n1. First new step\n2. Second new step\n'), app.text()[-80:])
+        nums = ed("[...r.querySelectorAll('ol li')].slice(-2).map(li => getComputedStyle(li, '::before').content)")
+        ok('the numbers are drawn whole, also at a large text size', all('counter' in n for n in nums), nums)
+        caret_at_end_of('raw html')
+        app.page.keyboard.type(' Edited.'); time.sleep(0.6)
+        ok('editing a part with HTML in it: says that the HTML could not be kept', any('HTML' in b for b in app.banners()) and
+           '<span' not in app.text() and 'raw html in a line. Edited.' in app.text(), (app.banners(), app.text()[-300:]))
+        app.page.keyboard.press('Control+z'); time.sleep(0.6)
+        ok('and Undo brings the HTML back', '<span style="color:red">raw html</span> in a line.' in app.text(), app.text())
+
+        app.page.click('#mdModeBtn'); time.sleep(0.3)
+        ok('Source: the formatting buttons stay for the Markdown text', not app.ev("document.getElementById('mdTools').hidden"))
+        app.ev("""() => { const a = document.getElementById('editor'); const i = a.value.indexOf('Project'); a.focus(); a.setSelectionRange(i, i + 7); }""")
+        app.page.click('[data-md=italic]'); time.sleep(0.8)    # longer than the formatted editor's delay: nothing of it comes late
+        ok('a button in Source writes the Markdown around the selection (and the formatted editor does not undo it later)',
+           '# *Project* notes' in app.text(), app.text()[:40])
+        app.ev("""() => { const a = document.getElementById('editor'); const i = a.value.indexOf('[other'); a.focus(); a.setSelectionRange(i, i); }""")
+        app.page.click('[data-md=image]'); time.sleep(0.5)
+        ok('the picture button asks for a picture in the granted folders', app.dialog_open('fileDialog') and
+           app.ev("document.getElementById('fdTitle').textContent") == 'Insert a picture')
+        app.fd_click('pic.png'); app.ev("document.getElementById('fdOk').click()"); time.sleep(0.6)
+        ok('and writes it in, with its address relative to the file', '![pic](pic.png)[other file](other.md)' in app.text(), app.text()[-120:])
+        app.page.keyboard.press('Control+z'); app.page.keyboard.press('Control+z'); time.sleep(0.2)
+        app.page.click('#mdModeBtn'); time.sleep(0.8)
+        app.ev("""() => { const a = [...document.querySelectorAll('.md-edit a')].find(a => a.textContent === 'other file');
+            a.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, ctrlKey: true})); }""")
+        time.sleep(0.6)
+        if app.dialog_open('choiceDialog'):
+            app.ev("document.getElementById('choiceDialog').close('discard')"); time.sleep(1.0)
+        ok('Ctrl+click on a link to another file in the granted folder opens it', app.ev("document.getElementById('docName').textContent") == 'other.md')
+        open_md('latin.md')
+        wait(lambda: app.ev("!!document.querySelector('.md-view h1')"), 'the read-only view', 15)
+        ok('a Markdown file that cannot be edited: formatted, read-only, no formatting buttons',
+           app.ev("!document.querySelector('.md-view [contenteditable=true]')") and app.ev("document.getElementById('mdTools').hidden"))
+
+        def discard_if_asked():
+            time.sleep(0.4)
+            if app.dialog_open('choiceDialog'):
+                app.ev("document.getElementById('choiceDialog').close('discard')"); time.sleep(0.6)
+        put_file('/alice/Notes/long.md', ('# Long\n\n' + '\n\n'.join('Paragraph %d, long enough to scroll.' % i for i in range(1, 90)) + '\n').encode())
+        open_md('long.md'); discard_if_asked()
+        wait(lambda: app.ev("!!document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror[contenteditable=true]')"), 'long.md', 15)
+        time.sleep(0.8)
+        app.page.click('#optionsMenuBtn'); time.sleep(0.3)
+        on_top = app.ev("""() => { const m = document.getElementById('optionsMenu'); const r = m.getBoundingClientRect();
+            const e = document.elementFromPoint(r.x + 30, r.y + 30);
+            return [!m.hidden && !!e && !!e.closest('#optionsMenu'), m.hidden, [r.x, r.y, r.width, r.height], innerWidth, innerHeight]; }""")
+        ok('Options opens above the formatted editor (it can be used)', on_top[0], on_top)
+        app.page.keyboard.press('Escape')
+        scroller = "document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror')"
+        app.ev(scroller + ".scrollTop = 1500"); time.sleep(0.3)
+        box = app.page.locator('.md-edit .toastui-editor-ww-container .ProseMirror').bounding_box()
+        app.page.mouse.click(box['x'] + 200, box['y'] + box['height'] / 2); time.sleep(0.2)
+        top = app.ev(scroller + ".scrollTop")
+        for ch in 'typed here':
+            app.page.keyboard.type(ch); time.sleep(0.25)
+        time.sleep(0.4)
+        ok('typing formatted does not move the view', abs(app.ev(scroller + ".scrollTop") - top) < 3 and 'typed here' in app.text(),
+           (top, app.ev(scroller + ".scrollTop")))
+        app.page.keyboard.press('Control+z'); time.sleep(0.6)
+        ok('nor does Undo', abs(app.ev(scroller + ".scrollTop") - top) < 40 and 'typed here' not in app.text(), (top, app.ev(scroller + ".scrollTop")))
+
+        open_md('plain.txt'); discard_if_asked()
+        time.sleep(0.5)
+        ok('with the formatting buttons on, any text file has them and can be shown formatted; it starts as text',
+           not app.ev("document.getElementById('mdButtons').hidden") and app.ev("document.getElementById('mdModeBtn').textContent") == 'Formatted' and
+           not app.ev("document.getElementById('mdTools').hidden") and not app.ev("document.getElementById('editor').hidden"))
+        app.page.click('#mdModeBtn')
+        wait(lambda: app.ev("!!document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror[contenteditable=true]')"), 'plain.txt formatted', 10)
+        time.sleep(0.4)
+        select_in('plain', 0, 5)
+        app.page.click('[data-md=bold]'); time.sleep(0.6)
+        ok('formatted, B writes Markdown into the text file', app.text() == '**plain**\n', app.text())
+        app.ev("const c = document.getElementById('mdToolsCheck'); c.checked = false; c.dispatchEvent(new Event('change'))"); time.sleep(0.5)
+        ok('formatting buttons off: the text file is plain text again, no Markdown buttons', app.ev("document.getElementById('mdButtons').hidden") and
+           not app.ev("document.getElementById('editor').hidden") and app.text() == '**plain**\n')
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+
+        # the same under the Content-Security-Policy Peergos gives apps: nothing may be blocked
+        csp = ("default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+               "font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'")
+        ctx = fresh_ctx()
+        page = ctx.new_page()
+        page_errors = []
+        page.on('pageerror', lambda e: page_errors.append(str(e)))
+        page.add_init_script("window.__csp = []; document.addEventListener('securitypolicyviolation', "
+                             "e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI));")
+
+        def with_csp(route):
+            r = route.fetch()
+            route.fulfill(response=r, headers=dict(r.headers, **{'content-security-policy': csp}))
+        page.route(lambda u: '/index.html' in u, with_csp)
+        page.goto(address())
+        wait(lambda: page.evaluate("typeof sessionReady !== 'undefined' && sessionReady && Files.usable().length > 0"), 'the start under the CSP', 20)
+        page.evaluate("openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'notes.md'})")
+        wait(lambda: page.evaluate("document.querySelectorAll('.md-edit .pee-math-widget .katex').length") == 1, 'formatted editor under the CSP', 15)
+        page.evaluate("openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'latin.md'})")
+        wait(lambda: page.evaluate("!!document.querySelector('.md-view h1')"), 'read-only view under the CSP', 15)
+        page.evaluate("fetch('http://127.0.0.2:9/x').catch(() => {})"); time.sleep(0.5)   # proves the policy is on
+        v = page.evaluate("window.__csp")
+        ok('under Peergos\' Content-Security-Policy: formatted editing, math and the read-only view work, nothing else is blocked',
+           v == ['connect-src http://127.0.0.2:9/x'] and not page_errors, (v, page_errors))
+        ctx.close()
 
         browser.close()
     print('\n%s' % ('ALL PASSED' if not failures else '%d FAILED: %s' % (len(failures), ', '.join(failures))), flush=True)

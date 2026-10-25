@@ -9,17 +9,26 @@
 <body class="theme-green-on-black">
   <header class="toolbar">
     <span id="docName" class="doc-name" title="">PeergosEasyEdit</span>
+    <button type="button" id="closeDocBtn" class="close-doc" title="Close this file" aria-label="Close this file" hidden>×</button>
     <div class="menu">
       <button type="button" class="menu-button" id="fileMenuBtn" aria-haspopup="true" aria-expanded="false">File ▾</button>
       <div class="menu-panel" id="fileMenu" role="menu" hidden>
         <button type="button" role="menuitem" id="newMenuItem">New</button>
         <button type="button" role="menuitem" id="openMenuItem">Open…</button>
-        <div class="menu-label">Recent files</div>
-        <div id="recentMenu" class="recent-list"></div>
+        <div class="submenu" id="recentSub">
+          <button type="button" role="menuitem" id="recentMenuBtn" aria-haspopup="true" aria-expanded="false">Recent files <span aria-hidden="true">▸</span></button>
+          <div class="menu-panel submenu-panel" id="recentSubmenu" hidden>
+            <div id="recentMenu" class="recent-list"></div>
+          </div>
+        </div>
         <hr>
         <button type="button" role="menuitem" id="saveMenuItem">Save <kbd>Ctrl+S</kbd></button>
         <button type="button" role="menuitem" id="saveAsBtn" disabled>Save as… <kbd>Ctrl+Shift+S</kbd></button>
         <button type="button" role="menuitem" id="renameMenuItem" disabled>Rename…</button>
+        <hr>
+        <button type="button" role="menuitem" id="importMenuItem" title="A text file from this device becomes a new text, to save in Peergos">Import…</button>
+        <button type="button" role="menuitem" id="exportMenuItem" title="Download the text shown to this device" disabled>Export…</button>
+        <input type="file" id="importInput" hidden>
         <hr>
         <button type="button" role="menuitem" id="closeMenuItem" disabled>Close</button>
       </div>
@@ -29,11 +38,36 @@
       <button type="button" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>↶</button>
       <button type="button" id="redoBtn" title="Redo (Ctrl+Y)" aria-label="Redo" disabled>↷</button>
     </span>
-    <span class="group" role="group" aria-label="Text size">
-      <button type="button" id="fontSmallerBtn" title="Smaller text">A−</button>
+    <span class="group" role="group" aria-label="Markdown" id="mdButtons" hidden>
+      <button type="button" id="mdModeBtn" aria-pressed="false" title="The Markdown text itself, exactly as it is in the file">Source</button>
+    </span>
+    <span class="group md-tools" role="group" aria-label="Formatting" id="mdTools" hidden>
+      <button type="button" data-md="bold" title="Bold"><b>B</b></button>
+      <button type="button" data-md="italic" title="Italic"><i>I</i></button>
+      <button type="button" data-md="strike" title="Struck out"><s>S</s></button>
+      <button type="button" data-md="h1" title="Heading 1">H1</button>
+      <button type="button" data-md="h2" title="Heading 2">H2</button>
+      <button type="button" data-md="h3" title="Heading 3">H3</button>
+      <button type="button" data-md="ul" title="Bulleted list">•≡</button>
+      <button type="button" data-md="ol" title="Numbered list">1≡</button>
+      <button type="button" data-md="task" title="Task list">☐</button>
+      <button type="button" data-md="quote" title="Quote">❝</button>
+      <button type="button" data-md="code" title="Code in the line">‹›</button>
+      <button type="button" data-md="codeblock" title="Code block">{ }</button>
+      <button type="button" data-md="link" title="Link">🔗</button>
+      <button type="button" data-md="table" title="Table">⊞</button>
+      <button type="button" data-md="image" title="Picture from your folders">🖼</button>
+      <button type="button" data-md="hr" title="Line across">―</button>
+    </span>
+    <span class="group" role="group" aria-label="Text size" id="fontSizeGroup">
+      <button type="button" id="fontSmallerBtn" title="Smaller text (or turn the mouse wheel here)">A−</button>
       <input type="number" id="fontSizeInput" class="size-input" min="6" max="96" step="1" value="14"
-             title="Text size in pixels (6–96): type a number or use A− A+" aria-label="Text size">
-      <button type="button" id="fontBiggerBtn" title="Bigger text">A+</button>
+             title="Text size in pixels (6–96): type a number, use A− A+ or turn the mouse wheel here" aria-label="Text size">
+      <button type="button" id="fontBiggerBtn" title="Bigger text (or turn the mouse wheel here)">A+</button>
+    </span>
+    <span class="group" role="group" aria-label="Side panel" id="panelButtons">
+      <button type="button" id="notesPanelBtn" aria-pressed="false" title="Show or hide your notes">Notes</button>
+      <button type="button" id="historyPanelBtn" aria-pressed="false" title="Show or hide the edit history">History</button>
     </span>
     <span id="status" class="status" role="status" aria-live="polite"></span>
     <span class="spacer"></span>
@@ -113,6 +147,10 @@
             <option value="history">Edit history</option>
           </select>
         </label>
+        <label class="check" title="Notes and History buttons in the bar, to switch the side panel with one click">
+          <input type="checkbox" id="panelButtonsCheck"> Side panel buttons</label>
+        <label class="check" title="Markdown files: bold, italic, headings, lists, links, pictures … in the bar. Formatted they format, in Source they write the Markdown.">
+          <input type="checkbox" id="mdToolsCheck"> Formatting buttons (Markdown)</label>
         <hr>
         <button type="button" id="backupBtn">Backup…</button>
         <button type="button" id="startLinkBtn" title="A link to bookmark: starts the editor without choosing a file">Start link…</button>
@@ -141,6 +179,8 @@
       </section>
       <div id="measure" class="measure" aria-hidden="true"></div>
     </div>
+    <div id="panelHandle" class="panel-handle" role="separator" aria-orientation="vertical" aria-label="Width of the side panel"
+         tabindex="0" title="Drag to change the width (or ← →); double-click: normal width" hidden></div>
     <aside id="notesPanel" class="notes-panel" hidden>
       <div class="notes-head">
         <h2>Notes</h2>
@@ -217,6 +257,24 @@
       <div class="dialog-buttons">
         <button type="button" id="promptCancel">Cancel</button>
         <button value="ok" id="promptOk" class="primary">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="exportDialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Export to this device</h2>
+      <label class="field">File name <input type="text" id="exportName" maxlength="255" spellcheck="false"></label>
+      <p>Your browser saves the file where it saves downloads, usually the Downloads folder. To find it: Ctrl+J
+        lists your downloads, with <b>Show in folder</b>. Peergos runs the editor inside its own page, and there
+        browsers do not let the editor open the system's <i>Save as</i> window or a folder on this device itself. To
+        choose the folder every time, switch on <b>Ask where to save each file</b> in your browser's download
+        settings.</p>
+      <div class="dialog-buttons">
+        <button type="button" id="exportCopy" title="Copy the whole text, to paste it anywhere on this device">Copy text</button>
+        <span class="spacer"></span>
+        <button type="button" id="exportCancel">Cancel</button>
+        <button value="export" id="exportOk" class="primary">Export</button>
       </div>
     </form>
   </dialog>
@@ -313,8 +371,8 @@
           with the new file. Without granted folders, Peergos' own save dialog is used and the editor keeps working
           on the file it opened.</p>
         <h3>Tabs</h3>
-        <p>Without tabs, one file is open at a time: opening or starting another closes it, after asking whether to
-          save it if it has unsaved changes. <b>Options → Tabs</b> lets you keep several files open, one per tab (+
+        <p>Without tabs, one file is open at a time (× next to its name closes it): opening or starting another
+          closes it, after asking whether to save it if it has unsaved changes. <b>Options → Tabs</b> lets you keep several files open, one per tab (+
           starts a new text). Switching tabs off closes all but the file shown, asking about each one with unsaved
           changes; if you cancel, tabs stay on. Whatever is open when you leave comes back the next time the editor
           starts from the launcher. A file opened from the Drive comes back only if it is in a granted folder.</p>
@@ -330,9 +388,17 @@
           again. Undoing all the way back to what is in the file means there is nothing left to save. The history
           is kept only while the file is open – it is not saved anywhere.</p>
         <h3>Recent files</h3>
-        <p><b>File</b> lists the files you opened last (how many: <b>Options → Recent files</b>, or off). A file
-          that was deleted or moved meanwhile is marked <i>not found</i>; × removes it from the list. The list is
-          kept in Peergos, so it is the same on every device.</p>
+        <p><b>File → Recent files</b> lists the files you opened last (how many: <b>Options → Recent files</b>, or
+          off). A file that was deleted or moved meanwhile is marked <i>not found</i>; × removes it from the list. The
+          list is kept in Peergos, so it is the same on every device.</p>
+        <h3>Import and export</h3>
+        <p><b>File → Import…</b> takes a text file from this device (UTF-8) and opens it as a new text with the
+          file's name; the editor then asks where to save it in Peergos. <b>File → Export…</b> asks for a file name and
+          downloads the text shown – also changes not saved yet – to this device. Your browser saves it where it saves
+          downloads (Ctrl+J lists them, with <b>Show in folder</b>): Peergos runs the editor inside its own page, and
+          there browsers do not let the editor open the system's Save as window or a folder on this device. To choose the folder every time, switch on <b>Ask where to
+          save each file</b> in your browser's download settings. <b>Copy text</b> in that window puts the whole text
+          on the clipboard instead. Both happen only when you choose them.</p>
         <h3>Text that was not saved</h3>
         <p>Text that is not in its file yet – a new text, changes while autosave is off, or a save that failed – is
           kept as a draft in the app's own folder in Peergos (see <b>Backup</b>). When you open the file again,
@@ -346,16 +412,40 @@
         <p>Peergos passes the file name to apps in a way that changes the characters <b>+ &amp; # %</b>. The editor
           notices this and does not open such a file, so it cannot save to the wrong place. Rename the file in your
           Drive and open it again. Peergos cannot open files whose name has a % sign in any app at the moment.</p>
+        <h3 id="markdownHelp">Markdown files</h3>
+        <p>A Markdown file (<code>.md</code>) opens formatted, and you edit it as it looks: headings, lists, task
+          lists, tables, quotes, code, links, pictures, math (<code>$…$</code>, <code>$$…$$</code>), struck out
+          (<code>~~…~~</code>), sub- and superscript (<code>H~2~O</code>, <code>X^2^</code>). The button
+          <b>Source</b> in the bar shows the Markdown text itself, exactly as it is in the file; <b>Formatted</b> goes
+          back.</p>
+        <p><b>Options → Formatting buttons</b> puts buttons in the bar: bold, italic, struck out, headings H1–H3,
+          bulleted and numbered list, task list, quote, code, code block, link, table, picture and line. Formatted
+          they format; in Source they write the Markdown for you. The picture button lets you choose a picture in your
+          folders and writes its address relative to the file. With these buttons on, every text file has them and
+          the <b>Formatted</b> button too, so any text can be written as Markdown; it opens as text, a
+          <code>.md</code> file opens formatted.</p>
+        <p>Editing formatted keeps your file's own writing: only the paragraphs, headings, lists or tables you change
+          are written in the editor's Markdown style, everything else stays exactly as it was. A formula is one piece
+          in the formatted view: it is kept exactly, and edited in Source. The formatted editor cannot keep HTML in a
+          part you change; it says so, and Undo brings the part back. Ctrl+click opens a link. Pictures and links to
+          other files work when they are in a folder you let the editor use; pictures from other web sites cannot be
+          shown inside Peergos. A Markdown file the editor cannot change is shown formatted, read-only.</p>
         <h3>Text encoding and line endings</h3>
         <p>Files are read and written as UTF-8. A file that is not valid UTF-8 opens read-only, so it cannot be
           damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
         <h3>Look</h3>
-        <p>A− and A+ change the size of the text you edit; <b>Options → Interface size</b> changes the menus,
+        <p>A− and A+ change the size of the text you edit, and so does the mouse wheel over them or the number
+          between them; <b>Options → Interface size</b> changes the menus,
           buttons and windows. Also under <b>Options</b>: theme, font, autosave, recent files, tabs, line wrapping,
           line numbers and the side panel. Every choice applies and is saved at once, in Peergos, so it is the same
           on every device.</p>
+        <h3>Side panel</h3>
+        <p>The <b>Notes</b> and <b>History</b> buttons in the bar show that panel on the right; clicking the lit
+          button hides it again (the same as <b>Options → Side panel</b>; <b>Options → Side panel buttons</b> hides
+          the buttons). Drag the panel's left edge to make it wider or narrower; double-click the edge for the
+          normal width.</p>
         <h3>Notes</h3>
-        <p><b>Options → Side panel → Notes</b> shows a panel for your own notes about anything. They are saved in the
+        <p><b>Options → Side panel → Notes</b> (or the <b>Notes</b> button) shows a panel for your own notes about anything. They are saved in the
           app's own folder in Peergos. <b>Show all</b> puts every note in one window with a tick box each, to read
           them together or copy the ticked ones. If the notes cannot be read, the panel says so and does not change
           them until they could be read.</p>
@@ -374,6 +464,15 @@
         <p>A simple text editor for files in your Peergos Drive. Version <span id="aboutVersion"></span>.</p>
         <p>Free software under the GNU General Public License, version 3 or later.</p>
         <h3>History</h3>
+        <h4>1.4.0 (2026-10-25)</h4>
+        <ul>
+          <li>Markdown files open formatted and are edited as they look; Source shows the exact text. Only the parts
+            you edit change; math, pictures, sub- and superscript are shown. Options → Formatting buttons, also for
+            any text file.</li>
+          <li>File → Import… and Export… (to and from this device, or copy the text).</li>
+          <li>Notes and History buttons for the side panel, which can be made wider or narrower; the mouse wheel
+            changes the text size; recent files in a submenu; × closes the file without tabs.</li>
+        </ul>
         <h4>1.3.0 (2026-10-24)</h4>
         <ul>
           <li>Undo and Redo (also Ctrl+Z, Ctrl+Y); Options → Side panel → Edit history lists the steps of the open
@@ -436,6 +535,8 @@
   <script src="js/history.js"></script>
   <script src="js/files.js"></script>
   <script src="js/docs.js"></script>
+  <script src="js/mdmerge.js"></script>
+  <script src="js/markdown.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -83,6 +83,12 @@ const Files = (() => {
   // A file from an earlier session (opened from the Drive) that lies in a granted folder: reachable again.
   const inGrant = path => grantLocs(path)[0] || null;
 
+  // A file to read only (a picture in a Markdown file): in any granted folder, also one granted read-only.
+  const readable = path => {
+    const g = (grantList || []).find(x => !x.stale && x.path && path.startsWith(x.path + '/'));
+    return g ? {kind: 'grant', grantId: g.grantId, rel: path.substring(g.path.length + 1)} : null;
+  };
+
   // A file opened from the Drive that lies in a granted folder: the same file as a lasting location, so its tab
   // and recent entry still work after a restart. Checked by reading it both ways.
   async function lastingFor(path, bytes) {
@@ -313,5 +319,5 @@ const Files = (() => {
     $('fileDialog').addEventListener('cancel', e => { e.preventDefault(); finish(null); });
   }
 
-  return {refreshGrants, grantPath, supported, usable, inGrant, lastingFor, show, wire};
+  return {refreshGrants, grantPath, supported, usable, inGrant, readable, lastingFor, show, wire};
 })();

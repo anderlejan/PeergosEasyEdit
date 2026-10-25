@@ -196,6 +196,7 @@ const Docs = (() => {
   }
 
   async function storeDraft(doc, force) {
+    Markdown.flush(doc);       // what was typed formatted, into the text
     clearTimeout(doc.draftTimer);
     doc.draftSince = null;
     if (!(force ? App.settings.drafts && doc.loaded && doc.dirty : wantsDraft(doc)))
@@ -250,6 +251,7 @@ const Docs = (() => {
   }
 
   function autoSaveNow(doc) {
+    Markdown.flush(doc);
     clearTimeout(doc.autoTimer);
     const s = App.settings;
     if (s.autoSave && doc.canSave && doc.loaded && !doc.restoreOpen && !doc.conflict && doc.dirty && doc.loc.kind !== 'new')
@@ -268,6 +270,7 @@ const Docs = (() => {
   /* ---------- saving ---------- */
 
   async function save(doc, options) {
+    Markdown.flush(doc);
     const auto = !!(options && options.auto === true);
     if (!doc.loaded || doc.restoreOpen)
       return;
@@ -387,6 +390,7 @@ const Docs = (() => {
   }
 
   async function saveAs(doc) {
+    Markdown.flush(doc);
     if (!doc.loaded || doc.saving || doc.restoreOpen)
       return;
     if (!Files.supported())

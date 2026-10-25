@@ -11,9 +11,10 @@ A simple text editor as a [Peergos](https://peergos.org) custom app, for the tex
   file changed or deleted elsewhere since it was opened is never overwritten without asking.
 - **Nothing on the device:** no texts, drafts, file names or settings in browser storage – everything the editor
   keeps is in Peergos, encrypted.
-- **File menu:** New, Open…, recent files, Save (Ctrl+S), Save as…, Rename…, Close. **Open…** and **Save as…**
-  browse the folders you let the editor use (Peergos asks once and remembers them); any other file can be picked
-  with Peergos' file picker.
+- **File menu:** New, Open…, Recent files, Save (Ctrl+S), Save as…, Rename…, Import…, Export…, Close. **Open…** and
+  **Save as…** browse the folders you let the editor use (Peergos asks once and remembers them); any other file can
+  be picked with Peergos' file picker. **Import…** brings a text file from your device into Peergos, **Export…**
+  downloads the text shown to your device.
 - **Undo and redo** (also Ctrl+Z, Ctrl+Y), with an optional **Edit history** panel to go back to any step; kept
   only while the file is open.
 - A start link (to bookmark) opens the editor as you left it, on any device: your tabs, your one file, or the
@@ -21,8 +22,13 @@ A simple text editor as a [Peergos](https://peergos.org) custom app, for the tex
   One file at a time, or optional **tabs**; **recent files** (how many is up to you), with files that are gone
   marked as such.
 - UTF-8 text; Windows line endings and the byte order mark are kept; files in other encodings open read-only.
-- Ten themes, text size, interface size, font, line wrapping, optional line numbers – under **Options**, applied
-  and saved at once in Peergos.
+- **Markdown** files open formatted and are edited as they look (headings, lists, task lists, tables, code, links,
+  pictures, math, sub- and superscript); **Source** shows the exact text; optional formatting buttons. Editing
+  formatted changes only the parts you edit - the rest of the file keeps its own Markdown exactly.
+- Ten themes, text size (also with the mouse wheel), interface size, font, line wrapping, optional line numbers –
+  under **Options**, applied and saved at once in Peergos.
+- A side panel for notes or the edit history, switched with the **Notes** and **History** buttons, as wide as you
+  drag it.
 - Notes about anything, kept in the app's private folder in Peergos, with **Show all** to read or copy them
   together, and export and import.
 
@@ -60,17 +66,21 @@ assets/index.html       entry point, help and history
 assets/js/              the app: peergos (requests to Peergos), text (encoding, line endings), store (the app's
                         Peergos folder: drafts, settings, tabs), files (locations, granted folders, Open/Save as
                         dialog), history (undo, redo, edit history), docs (loading, saving, autosave, conflicts,
-                        drafts, renaming), app (menus, tabs, recent files, settings, notes), version
+                        drafts, renaming), markdown + mdmerge (formatted view and editing of Markdown files),
+                        app (menus, tabs, recent files, settings, notes), version
+assets/vendor/          third-party files, NOT in git: Toast UI Editor 3.2.2 and KaTeX 0.16.11 (both MIT), fetched
+                        and checked against tools/vendor.json by tools/fetch_vendor.py
 assets/css/             styles
 tests/                  unit tests (Node), browser tests (Playwright + a mock Peergos), real Peergos scenarios
-tools/                  release build, settings loader
+tools/                  release build, third-party files (vendor.json, fetch_vendor.py), settings loader
 ```
 
 Settings for the tools and tests come from environment variables, or from a local `.env` file (copy
 `.env.example`; `.env` is never committed). The app itself has no settings or secrets.
 
 ```sh
-node tests/unit.test.js                 # text encoding, line endings, file-name checks
+python3 tools/fetch_vendor.py           # once after cloning: the third-party files, checked by SHA-256
+node tests/unit.test.js                 # text encoding, line endings, file names, Markdown merging
 python3 tests/browser_test.py           # the whole app against tests/mock_peergos.py (needs Playwright + Chromium)
 python3 tests/mock_peergos.py           # try the app at http://127.0.0.1:8790/index.html?username=test&pgi=t
 python3 tools/make_release.py --dev     # test build: ZIP + unpacked folder in Releases/dev/

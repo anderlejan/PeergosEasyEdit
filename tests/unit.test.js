@@ -157,4 +157,85 @@ test('input types', () => {
 });
 Date.now = realNow;
 
+/* ---------- Markdown: only the blocks changed in the formatted editor are written back ---------- */
+
+const MdMerge = require(path.join(__dirname, '..', 'assets', 'js', 'mdmerge.js'));
+// A stand-in for the Markdown parser: blocks are separated by blank lines; the kind from the first characters.
+function parse(text) {
+  const nodes = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i].trim()) { i++; continue; }
+    let j = i;
+    while (j + 1 < lines.length && lines[j + 1].trim()) j++;
+    const t = lines[i];
+    const type = /^#/.test(t) ? 'heading' : /^([-*]|\d+[.)]) /.test(t) ? 'list' : /^<\w/.test(t) ? 'htmlBlock' : 'paragraph';
+    nodes.push({type, sourcepos: [[i + 1, 1], [j + 1, lines[j].length]]});
+    i = j + 1;
+  }
+  const parts = MdMerge.split(text, nodes);
+  assert(parts, 'split ' + JSON.stringify(text));
+  assert.strictEqual(MdMerge.join(parts), text);
+  return parts;
+}
+// what the formatted editor makes of a file: its own style, no HTML blocks, no inline HTML, no link references
+const normalize = text => parse(text).blocks.filter(b => b.type !== 'htmlBlock' && !/^\[\w+\]:/.test(b.text))
+  .map(b => b.text.replace(/__(\w+)__/g, '**$1**').replace(/^(\d+)\) /gm, '$1. ').replace(/^\* /gm, '- ')
+                  .replace(/<[^>]+>/g, '')).join('\n\n');
+const mdEdit = (file, edit) => {
+  const base = normalize(file);
+  return MdMerge.merge(parse(file), parse(base), parse(edit(base)));
+};
+const FILE = '# Title\n\nSome __strong__ text.\n\n1) one\n2) two\n\n<div>html block</div>\n\nA <span>styled</span> word.\n\n' +
+             'See [it][r].\n\n[r]: http://example.org\n\nLast   paragraph.\n';
+
+test('Markdown: nothing changed in the formatted editor - the file stays exactly as it was', () => {
+  assert.strictEqual(mdEdit(FILE, t => t).text, FILE);
+  assert.deepStrictEqual(mdEdit(FILE, t => t).replaced, []);
+});
+test('Markdown: one paragraph changed - only it is written in the editor\'s style', () => {
+  const r = mdEdit(FILE, t => t.replace('Last   paragraph.', 'Last paragraph, edited.'));
+  assert.strictEqual(r.text, FILE.replace('Last   paragraph.', 'Last paragraph, edited.'));
+});
+test('Markdown: a changed paragraph takes the editor\'s style, its neighbours keep theirs', () => {
+  const r = mdEdit(FILE, t => t.replace('Some **strong** text.', 'Some **strong** text, more.'));
+  assert.strictEqual(r.text, FILE.replace('Some __strong__ text.', 'Some **strong** text, more.'));
+  assert(r.text.includes('1) one\n2) two'));
+});
+test('Markdown: a new paragraph is added between, one is removed', () => {
+  const r = mdEdit(FILE, t => t.replace('# Title\n\n', '# Title\n\nNew one.\n\n').replace('\n\nLast   paragraph.', ''));
+  assert.strictEqual(r.text, FILE.replace('# Title\n\n', '# Title\n\nNew one.\n\n').replace('[r]: http://example.org\n\nLast   paragraph.\n',
+                                                                                              '[r]: http://example.org\n'));
+});
+test('Markdown: an HTML block and a link reference the editor does not show stay, also when their neighbours change', () => {
+  const r = mdEdit(FILE, t => t.replace('See [it][r].', 'See [it][r] now.').replace('1. one', '1. One'));
+  assert(r.text.includes('<div>html block</div>') && r.text.includes('[r]: http://example.org'));
+  assert(r.text.includes('See [it][r] now.') && r.text.includes('1. One\n2. two'));
+  assert(!r.text.includes('See [it][r].'));
+});
+test('Markdown: a paragraph with HTML in it stays while untouched; edited, it is reported as replaced', () => {
+  assert(mdEdit(FILE, t => t.replace('Last', 'Final')).text.includes('A <span>styled</span> word.'));
+  const r = mdEdit(FILE, t => t.replace('A styled word.', 'A styled word!'));
+  assert(r.text.includes('A styled word!') && !r.text.includes('<span>'));
+  const i = parse(FILE).blocks.findIndex(b => b.text.includes('<span>'));
+  assert.deepStrictEqual(r.replaced, [i]);
+});
+test('Markdown: blank lines and the end of the file are kept around untouched blocks', () => {
+  const file = '\n# A\n\n\n\nb\n\n';
+  assert.strictEqual(mdEdit(file, t => t).text, file);
+  assert.strictEqual(mdEdit(file, t => t.replace('b', 'c')).text, '\n# A\n\n\n\nc\n\n');
+});
+test('Markdown: an empty file gets what was typed', () => {
+  assert.strictEqual(MdMerge.merge(parse(''), parse(''), parse('Hello')).text, 'Hello\n');
+});
+test('Markdown: positions that do not cut the text exactly are refused', () => {
+  assert.strictEqual(MdMerge.split('abc', [{type: 'paragraph', sourcepos: [[2, 1], [2, 3]]}]), null);
+  assert.strictEqual(MdMerge.split('ab\ncd', [{type: 'p', sourcepos: [[1, 1], [1, 2]]}, {type: 'p', sourcepos: [[1, 2], [2, 2]]}]), null);
+});
+test('Markdown: a block ending at column 0 ends with the line before', () => {
+  const parts = MdMerge.split('- a\n- b\n\nx', [{type: 'list', sourcepos: [[1, 1], [3, 0]]}, {type: 'paragraph', sourcepos: [[4, 1], [4, 1]]}]);
+  assert.deepStrictEqual(parts.blocks.map(b => b.text), ['- a\n- b', 'x']);
+  assert.deepStrictEqual(parts.seps, ['', '\n\n', '']);
+});
+
 console.log(process.exitCode ? 'unit tests FAILED' : passed + ' unit tests passed');

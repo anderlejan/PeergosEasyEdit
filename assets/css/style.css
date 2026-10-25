@@ -35,7 +35,7 @@ button.danger { background: #b42318; color: #fff; border-color: #b42318; }
 button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; background: var(--bar);
-           border-bottom: 1px solid var(--line); }
+           border-bottom: 1px solid var(--line); position: relative; z-index: 30; }   /* its menus above the Markdown editor */
 .toolbar button, .toolbar select { padding: 2px 8px; }
 kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
 
@@ -50,10 +50,16 @@ kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
 .menu-panel.options label:not(.check) { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .menu-panel.options select { max-width: 11em; }
 .menu-panel hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 2px 0; }
+.submenu { position: relative; display: flex; flex-direction: column; }
+.submenu > button { display: flex; justify-content: space-between; text-align: left; border: 0; background: transparent; padding: 5px 8px; }
+.submenu > button:hover, .submenu > button:focus-visible, .submenu > button[aria-expanded="true"] { background: var(--accent); color: var(--accent-fg); }
+.menu-panel.submenu-panel { top: -6px; left: calc(100% + 6px); max-height: 70vh; overflow: auto; }
 .toolbar label { display: inline-flex; align-items: center; gap: 5px; }
 .toolbar .spacer { flex: 1; }
 .doc-name { font-weight: 600; max-width: 28ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-name.dirty::before { content: "● "; color: var(--warn-fg, #b07000); }
+.toolbar .close-doc { border: 0; background: transparent; padding: 0 5px; margin-left: -6px; opacity: .6; line-height: 1; font-size: 1.15em; }
+.toolbar .close-doc:hover, .toolbar .close-doc:focus-visible { opacity: 1; }
 .group { display: inline-flex; align-items: center; gap: 3px; }
 .size-input { width: 4.2em; padding: 2px 4px; text-align: center; background: var(--panel); border: 1px solid var(--line);
               border-radius: 4px; }
@@ -85,8 +91,12 @@ kbd { font: inherit; font-size: .8em; opacity: .65; margin-left: 1.5em; }
            white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; tab-size: 4; pointer-events: none; }
 .measure div { min-height: 1.45em; }
 
-.notes-panel { width: 24em; max-width: 45vw; display: flex; flex-direction: column; border-left: 1px solid var(--line);
-               background: var(--panel); overflow: auto; }
+.notes-panel { width: 24em; max-width: 45vw; display: flex; flex-direction: column; background: var(--panel); overflow: auto; }
+/* the side panel's left edge: drag it to change the panel's width */
+.panel-handle { flex: none; width: 5px; cursor: col-resize; background: var(--bar); border-left: 1px solid var(--line);
+                touch-action: none; }
+.panel-handle:hover, .panel-handle:focus-visible, .panel-handle.dragging { background: var(--accent); outline: 0; }
+body.resizing { cursor: col-resize; user-select: none; }
 .notes-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; }
 .notes-head h2 { font-size: 1.1em; margin: 0; }
 .notes-buttons { display: flex; gap: 6px; }
@@ -191,3 +201,45 @@ section h3 { margin: .4em 0; }
 .fd-save-row label { flex: 1; display: flex; gap: 8px; align-items: center; }
 .fd-save-row input { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
 .link-button { border: 0; background: transparent; text-decoration: underline; padding: 2px 0; }
+
+/* Markdown: the formatted view (Toast UI) in the editor's theme and text size; its own toolbar is not used */
+.md-box { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); color: var(--fg); }
+.md-loading { margin: 12px 14px; opacity: .7; font-style: italic; }
+.md-view { flex: 1; overflow: auto; padding: 10px 18px 24px; }
+.md-edit { flex: 1; min-height: 0; }
+.md-box .toastui-editor-defaultUI { border: 0; border-radius: 0; }
+.md-box .toastui-editor-defaultUI-toolbar, .md-box .toastui-editor-toolbar, .md-box .toastui-editor-mode-switch { display: none; }
+.md-box .toastui-editor-main, .md-box .toastui-editor-ww-container, .md-box .toastui-editor-ww-container .toastui-editor,
+.md-box .ProseMirror { background: var(--bg); color: var(--fg); }
+.md-box .toastui-editor-contents { font-family: system-ui, sans-serif; font-size: var(--text-size, 14px); color: var(--fg); }
+.md-box .toastui-editor-contents p, .md-box .toastui-editor-contents li, .md-box .toastui-editor-contents td,
+.md-box .toastui-editor-contents th, .md-box .toastui-editor-contents h1, .md-box .toastui-editor-contents h2,
+.md-box .toastui-editor-contents h3, .md-box .toastui-editor-contents h4, .md-box .toastui-editor-contents h5,
+.md-box .toastui-editor-contents h6, .md-box .toastui-editor-contents blockquote p,
+.md-box .toastui-editor-contents blockquote ul, .md-box .toastui-editor-contents blockquote ol { color: var(--fg); }
+.md-box .toastui-editor-contents h1, .md-box .toastui-editor-contents h2 { border-bottom-color: var(--line); }
+.md-box .toastui-editor-contents blockquote { border-left-color: var(--line); opacity: .85; }
+.md-box .toastui-editor-contents pre, .md-box .toastui-editor-contents code,
+.md-box .toastui-editor-contents pre code { background: var(--panel); color: var(--fg); }
+.md-box .toastui-editor-contents table th { background: var(--bar); color: var(--fg); }
+.md-box .toastui-editor-contents table td, .md-box .toastui-editor-contents table th { border-color: var(--line); }
+.md-box .toastui-editor-contents hr { border-top-color: var(--line); }
+.md-box .toastui-editor-contents a { color: var(--accent); }
+.md-box .toastui-editor-contents img:not([src]) { display: inline-block; padding: 2px 6px; border: 1px dashed var(--line); opacity: .75; }
+.md-box .pee-math.display { display: block; text-align: center; margin: .6em 0; }
+.md-tools button { min-width: 2em; padding-left: 5px; padding-right: 5px; }
+/* list markers sized by the text, not in pixels: at larger text sizes Toast UI's 24 px number box broke "1." apart */
+.md-box .toastui-editor-contents ol, .md-box .toastui-editor-contents ul { padding-left: 1.8em; }
+.md-box .toastui-editor-contents ol > li::before { width: 2.2em; margin-left: -2.5em; white-space: nowrap; color: var(--fg); opacity: .6; }
+.md-box .toastui-editor-contents ul > li::before { width: .38em; height: .38em; margin-left: -1.05em; margin-top: .62em; background-color: var(--fg); opacity: .55; }
+.md-box .toastui-editor-contents .task-list-item { margin-left: -1.8em; padding-left: 1.8em; }
+.md-box .toastui-editor-contents .task-list-item::before { width: 1.15em; height: 1.15em; background-size: 1.15em 1.15em; top: .2em; }
+.md-box .toastui-editor-contents ul > li.task-list-item::before { margin: 0; opacity: 1; background-color: transparent; }
+.md-box .toastui-editor-contents del { color: var(--fg); opacity: .6; }
+/* sub- and superscript (H~2~O, X^2^), and math, shown inside the formatted editor; their markers hidden */
+.md-box .pee-sub { vertical-align: sub; font-size: .8em; }
+.md-box .pee-sup { vertical-align: super; font-size: .8em; }
+.md-box .pee-hidden { display: none; }
+.md-box .pee-mark { opacity: .45; }
+.md-box .pee-math-widget { cursor: default; }
+.md-box .pee-math-widget.display { display: block; text-align: center; margin: .4em 0; }

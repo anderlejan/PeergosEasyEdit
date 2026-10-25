@@ -10,6 +10,10 @@
 /build/
 *.zip
 
+# third-party files: fetched and checked by tools/fetch_vendor.py (pinned in tools/vendor.json)
+/assets/vendor/*
+!/assets/vendor/README.txt
+
 # local-only material and test data
 /_local/
 /data/

@@ -10,12 +10,14 @@ const UI_SIZES = [12, 13, 14, 15, 16, 18, 20];   // px: menus, buttons, dialogs 
 const UI_SIZE_RANGE = [10, 32];                   // any whole number in it can be typed in (Custom…)
 const FONT_SIZE_RANGE = [6, 96];                  // the text being edited
 const SIDE_PANELS = ['off', 'notes', 'history'];
+const PANEL_WIDTH_RANGE = [160, 2000];            // px, dragged at the panel's edge; 0 = the normal width
+const IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 const $ = id => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
                           fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace",
                           autoSave: 5, lineNumbers: false, sidePanel: 'off', tabs: false, recent: 10, drafts: true,
-                          uiSize: 14, history: true};
+                          uiSize: 14, history: true, panelButtons: true, panelWidth: 0, mdTools: false};
 const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
                 'blue', 'high-contrast'];
 
@@ -159,6 +161,7 @@ function refreshState() {
   $('saveMenuItem').disabled = $('saveBtn').disabled;
   $('saveAsBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.saving;
   $('closeMenuItem').disabled = !doc;
+  $('exportMenuItem').disabled = !doc || !doc.loaded;
   $('renameMenuItem').disabled = !doc || !doc.loaded || doc.saving || doc.renaming || doc.restoreOpen;
   const editable = canEdit(doc);
   $('undoBtn').disabled = !editable || (!!doc.history && !doc.history.canUndo);
@@ -172,8 +175,10 @@ function refreshState() {
     for (const d of docs) {
       d.area.hidden = d !== doc;
       if (d === doc) d.area.id = 'editor'; else d.area.removeAttribute('id');
+      Markdown.layout(d, d === doc);     // a Markdown file shown formatted instead
     }
   }
+  Markdown.bar(doc);
   const s = $('status');
   if (!doc) {
     s.className = 'status';
@@ -207,9 +212,11 @@ function refreshState() {
 
 /* ---------- tabs and documents ---------- */
 
+// With tabs off there is no tab bar: the × next to the file name in the bar closes the one open file.
 function renderTabs() {
   const bar = $('tabs');
   bar.hidden = !settings.tabs || docs.length === 0;
+  $('closeDocBtn').hidden = settings.tabs || !active;
   if (bar.hidden)
     return;
   bar.replaceChildren(...docs.map(d => {
@@ -262,6 +269,7 @@ function addDoc(doc) {
 }
 
 function removeDoc(doc) {
+  Markdown.drop(doc);
   clearTimeout(doc.autoTimer);
   clearTimeout(doc.draftTimer);
   doc.area.remove();
@@ -284,6 +292,7 @@ async function makeRoomFor() {
 }
 
 async function closeDoc(doc) {
+  Markdown.flush(doc);
   if (doc.dirty && !doc.readOnly) {
     if (doc !== active)
       activate(doc);      // show what the question is about
@@ -642,8 +651,9 @@ function cleanSettings(s) {
     if (Number.isFinite(s.fontSize)) out.fontSize = clamp(s.fontSize, FONT_SIZE_RANGE);
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
-    for (const k of ['lineNumbers', 'tabs', 'drafts', 'history'])
+    for (const k of ['lineNumbers', 'tabs', 'drafts', 'history', 'panelButtons', 'mdTools'])
       if (typeof s[k] === 'boolean') out[k] = s[k];
+    if (Number.isFinite(s.panelWidth)) out.panelWidth = s.panelWidth > 0 ? clamp(s.panelWidth, PANEL_WIDTH_RANGE) : 0;
     if (RECENT_CHOICES.includes(s.recent)) out.recent = s.recent;
     if (SIDE_PANELS.includes(s.sidePanel)) out.sidePanel = s.sidePanel;
     else if (s.showNotes === true) out.sidePanel = 'notes';      // 1.2.0 and older
@@ -674,12 +684,20 @@ function applySettings() {
   $('lineNumbersCheck').checked = settings.lineNumbers;
   $('notesPanel').hidden = settings.sidePanel !== 'notes';
   $('historyPanel').hidden = settings.sidePanel !== 'history';
+  $('panelHandle').hidden = settings.sidePanel === 'off';
+  PanelWidth.apply(settings.panelWidth);
   $('sidePanelSelect').value = settings.sidePanel;
+  $('panelButtonsCheck').checked = settings.panelButtons;
+  $('mdToolsCheck').checked = settings.mdTools;
+  $('panelButtons').hidden = !settings.panelButtons;
+  $('notesPanelBtn').setAttribute('aria-pressed', String(settings.sidePanel === 'notes'));
+  $('historyPanelBtn').setAttribute('aria-pressed', String(settings.sidePanel === 'history'));
   const ui = $('uiSizeSelect');
   if (![...ui.options].some(o => o.value === String(settings.uiSize)))   // a size typed in earlier
     ui.insertBefore(el('option', {value: String(settings.uiSize), textContent: settings.uiSize + ' (custom)'}), $('uiSizeCustom'));
   ui.value = String(settings.uiSize);
   document.documentElement.style.setProperty('--ui-size', settings.uiSize + 'px');
+  document.documentElement.style.setProperty('--text-size', settings.fontSize + 'px');   // also the formatted view
   EditPanel.render();
   for (const d of docs)
     applyLook(d.area);
@@ -737,7 +755,7 @@ const LineNumbers = (() => {
   function refresh() {
     clearTimeout(timer);
     const area = active && active.area;
-    const on = settings.lineNumbers && !!area;
+    const on = settings.lineNumbers && !!area && !Markdown.formatted(active);
     $('gutter').hidden = !on;
     if (!on) {
       $('gutterLines').replaceChildren();
@@ -777,6 +795,171 @@ const LineNumbers = (() => {
 
   return {refresh, later, follow};
 })();
+
+/* ---------- the side panel: switching it, and its width ---------- */
+
+// The Notes and History buttons in the bar: a click shows that panel, a click on the one shown hides it.
+function toggleSidePanel(which) {
+  changeSetting('sidePanel', settings.sidePanel === which ? 'off' : which);
+  LineNumbers.later();   // the editor's width changed
+}
+
+// Drag the panel's left edge (or ← → on it) to make the panel wider or narrower; a double-click gives the
+// normal width back. The width is saved with the settings when the drag ends.
+const PanelWidth = (() => {
+  const panels = () => [$('notesPanel'), $('historyPanel')];
+  const shown = () => panels().find(p => !p.hidden);
+
+  function apply(px) {
+    for (const p of panels()) {
+      p.style.width = px ? px + 'px' : '';
+      p.style.maxWidth = px ? 'calc(100vw - 160px)' : '';
+    }
+  }
+
+  // not wider than the window leaves room for the editor
+  function fit(px) {
+    const room = $('editorArea').parentElement.clientWidth - 160;
+    return clamp(Math.min(px, Math.max(PANEL_WIDTH_RANGE[0], room)), PANEL_WIDTH_RANGE);
+  }
+
+  function wire() {
+    const handle = $('panelHandle');
+    let startX = 0, startW = 0, width = 0;
+    handle.addEventListener('pointerdown', e => {
+      const panel = shown();
+      if (!panel || e.button !== 0)
+        return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      startX = e.clientX;
+      startW = width = panel.getBoundingClientRect().width;
+      handle.classList.add('dragging');
+      document.body.classList.add('resizing');
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!handle.hasPointerCapture(e.pointerId))
+        return;
+      width = fit(startW + startX - e.clientX);    // the panel is on the right: dragging left widens it
+      apply(width);
+      LineNumbers.later();
+    });
+    const end = e => {
+      if (!handle.hasPointerCapture(e.pointerId))
+        return;
+      handle.releasePointerCapture(e.pointerId);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      if (Math.round(width) !== Math.round(startW))
+        changeSetting('panelWidth', Math.round(width));
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('dblclick', () => {
+      changeSetting('panelWidth', 0);
+      LineNumbers.later();
+    });
+    handle.addEventListener('keydown', e => {
+      const panel = shown();
+      if (!panel || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight'))
+        return;
+      e.preventDefault();
+      const w = panel.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? 20 : -20);
+      changeSetting('panelWidth', fit(w));
+      LineNumbers.later();
+    });
+  }
+
+  return {apply, wire};
+})();
+
+// The mouse wheel over A− / the size / A+ changes the text size: one step per notch of the wheel
+// (a touchpad's small movements add up to a step).
+function wireFontWheel() {
+  let sum = 0;
+  $('fontSizeGroup').addEventListener('wheel', e => {
+    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    if (!dy)
+      return;
+    e.preventDefault();
+    if (Math.sign(dy) !== Math.sign(sum))
+      sum = 0;
+    sum += dy;
+    if (Math.abs(sum) < 50)
+      return;
+    sum = 0;
+    changeSetting('fontSize', settings.fontSize + (dy < 0 ? 1 : -1));
+    LineNumbers.later();
+  }, {passive: false});
+}
+
+/* ---------- import from and export to this device ---------- */
+
+// File → Import…: a text file from this device becomes a new text with the file's name; Save as… then puts it
+// into Peergos (cancelled: it stays open as a new text, kept as a draft like any other).
+async function importFile(file) {
+  if (!file)
+    return;
+  if (file.size > IMPORT_MAX_BYTES) {
+    toast('"' + file.name + '" is too big to edit here (more than ' + IMPORT_MAX_BYTES / 1024 / 1024 + ' MB).', 'error');
+    return;
+  }
+  let bytes;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (e) {
+    toast('"' + file.name + '" could not be read: ' + describeError(e), 'error');
+    return;
+  }
+  const decoded = TextCodec.decode(bytes);
+  if (!decoded.ok) {
+    toast('"' + file.name + '" is not UTF-8 text, so it was not imported.', 'error');
+    return;
+  }
+  if (!await makeRoomFor())
+    return;
+  const name = file.name.replace(/^\.+/, '').replace(/\//g, '-') || 'imported.txt';
+  const doc = addDoc(new Doc(Loc.newDoc(name)));
+  doc.area.value = decoded.text;
+  doc.bom = decoded.bom;     // kept as they were in the file
+  doc.eol = decoded.eol;
+  await Docs.load(doc);
+  activate(doc);
+  Docs.edited(doc);
+  await Docs.saveAs(doc);
+}
+
+// File → Export…: the text shown is downloaded to this device under a name the user can change. The browser decides
+// where (its downloads folder, or it asks when "Ask where to save each file" is on): Peergos runs the app in a frame
+// of another origin, where browsers refuse showSaveFilePicker ("Cross origin sub frames aren't allowed to show a file
+// picker", Edge, 2026-10-25). Line endings and byte order mark are the file's; a file that is not UTF-8 gives UTF-8.
+function exportActive() {
+  const doc = active;
+  if (!doc || !doc.loaded)
+    return;
+  Markdown.flush(doc);
+  const d = $('exportDialog');
+  $('exportName').value = doc.name;
+  d.returnValue = '';
+  d.showModal();
+  $('exportName').focus();
+  $('exportName').setSelectionRange(0, doc.name.lastIndexOf('.') > 0 ? doc.name.lastIndexOf('.') : doc.name.length);
+  d.addEventListener('close', () => {
+    const name = $('exportName').value.trim().replace(/[\\/]/g, '-');
+    if (d.returnValue !== 'export' || !name || !docs.includes(doc))
+      return;
+    const bytes = TextCodec.encode(doc.area.value, doc.readOnly ? {} : doc);
+    const url = URL.createObjectURL(new Blob([bytes], {type: 'text/plain;charset=utf-8'}));
+    const a = el('a', {href: url, download: name});
+    a.hidden = true;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast('"' + name + '" handed to your browser to save. To see it on this device: Ctrl+J (your downloads), then ' +
+          '"Show in folder".');
+  }, {once: true});
+}
 
 /* ---------- notes ---------- */
 
@@ -968,6 +1151,58 @@ function closeMenus(except) {
       $(m).hidden = true;
       $(b).setAttribute('aria-expanded', 'false');
     }
+  showRecentSubmenu(false);
+}
+
+// A menu stays inside the window: when the bar wraps (many buttons, a narrow window) Options can sit at the left,
+// where its menu, opening to the left of the button, was cut off.
+function fitMenu(panel) {
+  panel.style.left = panel.style.right = '';
+  const r = panel.getBoundingClientRect();
+  if (r.left < 4) {
+    panel.style.left = '0';
+    panel.style.right = 'auto';
+  } else if (r.right > innerWidth - 4) {
+    panel.style.left = 'auto';
+    panel.style.right = '0';
+  }
+}
+
+// File → Recent files ▸: opens beside the File menu on pointing at it, a click or →.
+let submenuTimer = null;
+function showRecentSubmenu(open) {
+  clearTimeout(submenuTimer);
+  $('recentSubmenu').hidden = !open;
+  $('recentMenuBtn').setAttribute('aria-expanded', String(open));
+}
+
+function wireRecentSubmenu() {
+  const btn = $('recentMenuBtn');
+  btn.onclick = e => {      // opens it (pointing at it may have done so already); leaving or Escape closes it
+    e.stopPropagation();
+    showRecentSubmenu(true);
+  };
+  $('recentSub').addEventListener('mouseenter', () => showRecentSubmenu(true));
+  // a moment's grace: the pointer crosses a small gap on its way into the submenu
+  $('recentSub').addEventListener('mouseleave', () => {
+    clearTimeout(submenuTimer);
+    submenuTimer = setTimeout(() => showRecentSubmenu(false), 300);
+  });
+  btn.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      showRecentSubmenu(true);
+      const first = $('recentSubmenu').querySelector('button:not(:disabled)');
+      if (first) first.focus();
+    }
+  });
+  $('recentSubmenu').addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      showRecentSubmenu(false);
+      btn.focus();
+    }
+  });
 }
 
 // Drop-down menus: one open at a time; Escape, a click outside or choosing an item closes it.
@@ -982,15 +1217,17 @@ function wireMenus() {
       $(m).hidden = !open;
       $(b).setAttribute('aria-expanded', String(open));
       if (open) {
+        fitMenu($(m));
         const first = $(m).querySelector('button:not(:disabled), select, input');
         if (first) first.focus();
       }
     };
     $(m).addEventListener('click', e => {
-      if (e.target.closest('button') && !e.target.closest('.recent-forget'))   // an action was chosen
+      if (e.target.closest('button') && !e.target.closest('.recent-forget, #recentMenuBtn'))   // an action was chosen
         closeMenus(null);
     });
   }
+  wireRecentSubmenu();
   document.addEventListener('click', e => { if (!e.target.closest('.menu')) closeMenus(null); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenus(null); });
 }
@@ -1007,6 +1244,7 @@ function wire() {
   $('newMenuItem').onclick = () => newDoc();
   $('openMenuItem').onclick = () => openDialog();
   $('closeMenuItem').onclick = () => active && closeDoc(active);
+  $('closeDocBtn').onclick = () => active && closeDoc(active);
   $('startNew').onclick = () => newDoc();
   $('startOpen').onclick = () => openDialog();
   document.addEventListener('keydown', e => {
@@ -1019,6 +1257,7 @@ function wire() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden')
       for (const d of docs) {
+        Markdown.flush(d);
         Docs.autoSaveNow(d);
         Docs.storeDraft(d);
       }
@@ -1094,6 +1333,32 @@ function wire() {
   $('sidePanelSelect').onchange = e => {
     changeSetting('sidePanel', e.target.value);
     LineNumbers.later();   // the editor's width changed
+  };
+  $('notesPanelBtn').onclick = () => toggleSidePanel('notes');
+  $('historyPanelBtn').onclick = () => toggleSidePanel('history');
+  $('panelButtonsCheck').onchange = e => changeSetting('panelButtons', e.target.checked);
+  // the formatting buttons, and with them the Formatted view for any text, not only .md files
+  $('mdToolsCheck').onchange = e => {
+    if (active)
+      Markdown.flush(active);
+    changeSetting('mdTools', e.target.checked);
+    refreshState();
+    LineNumbers.refresh();
+  };
+  PanelWidth.wire();
+  wireFontWheel();
+  Markdown.wire();
+  $('importMenuItem').onclick = () => {
+    $('importInput').value = '';
+    $('importInput').click();
+  };
+  $('importInput').onchange = e => importFile(e.target.files[0]);
+  $('exportMenuItem').onclick = exportActive;
+  $('exportCancel').onclick = () => $('exportDialog').close('cancel');
+  $('exportCopy').onclick = () => {
+    $('exportDialog').close('cancel');
+    if (active && active.loaded)
+      copyText(active.area.value, 'The text of "' + active.name + '"');
   };
   $('uiSizeSelect').onchange = async e => {
     if (e.target.value === 'custom') {

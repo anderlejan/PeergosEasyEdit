@@ -3,6 +3,7 @@ name: Release
 # When the version in peergos-app.json has no tag yet: runs the tests, builds the app ZIP, the source ZIP and
 # SHA256SUMS from the commit (tools/make_release.py), pushes the annotated tag and creates a DRAFT release with
 # the three files. The notes come from release-notes/v<version>.md, or else from the version's CHANGELOG section.
+# The third-party files of the app (not in git) are fetched by make_release.py and checked against tools/vendor.json.
 # Publishing the draft stays a person's decision.
 
 on:

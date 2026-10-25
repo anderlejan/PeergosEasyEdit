@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.0
+Added
+- **Markdown files** (.md) open formatted and are edited as they look (WYSIWYG), shown as Peergos' own viewer
+  shows them: headings, lists, task lists, tables, quotes, code, links, pictures from granted folders, math
+  (KaTeX), struck out, sub- and superscript (H~2~O, X^2^). **Source** in the bar shows the exact text and back.
+  **Options → Formatting buttons** adds bold, italic, struck out, H1–H3, lists, task list, quote, code, link,
+  table, picture and line buttons to the bar; in Source they write the Markdown. With them on, any text file can
+  be shown and edited formatted too (it opens as text). Editing formatted changes only the
+  blocks you edit - the rest of the file keeps its own Markdown exactly; formulas are kept exactly. Ctrl+click opens
+  links; links to other files in granted folders open them in the editor.
+- **Notes** and **History** buttons in the bar switch the side panel with one click (a click on the lit one hides
+  it); **Options → Side panel buttons** hides them.
+- The side panel's width can be changed by dragging its left edge (or ← → on it); a double-click gives the normal
+  width back. The width is kept with the settings, on every device.
+- The mouse wheel over A−, the text size or A+ makes the text bigger or smaller.
+- **File → Import…**: a UTF-8 text file from this device opens as a new text with its name, and Save as… puts it
+  into Peergos (byte order mark and line endings kept). **File → Export…** asks for a file name and downloads the
+  text shown to this device; the browser saves it with its downloads (browsers do not let apps inside Peergos open
+  the system's Save as window; the browser's "Ask where to save each file" setting gives it). Its **Copy text**
+  button puts the whole text on the clipboard instead.
+
+Changed
+- Recent files moved into a submenu: **File → Recent files ▸**.
+- Without tabs, a × next to the file name in the bar closes the open file.
+
 ## 1.3.0
 Fixed
 - Without tabs, more than one file could stay open: switching tabs off only hid the tab bar. It now closes all but
