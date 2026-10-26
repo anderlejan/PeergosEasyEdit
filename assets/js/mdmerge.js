@@ -42,8 +42,33 @@ const MdMerge = (() => {
 
   const join = parts => parts.seps[0] + parts.blocks.map((b, i) => b.text + parts.seps[i + 1]).join('');
 
-  // Longest common subsequence of a and b under eq: the matched index pairs, in order.
+  const TABLE_LIMIT = 1000000;    // cells of the exact comparison; beyond it a quicker, nearly as good one
+
+  // Longest common subsequence of a and b under eq: the matched index pairs, in order. The equal start and end are
+  // matched first (an edit changes a few blocks in the middle), so a big file stays quick.
   function lcs(a, b, eq) {
+    let start = 0, endA = a.length, endB = b.length;
+    while (start < endA && start < endB && eq(a[start], b[start]))
+      start++;
+    while (endA > start && endB > start && eq(a[endA - 1], b[endB - 1])) {
+      endA--;
+      endB--;
+    }
+    const pairs = [];
+    for (let i = 0; i < start; i++)
+      pairs.push([i, i]);
+    const n = endA - start, m = endB - start;
+    if (n > 0 && m > 0) {
+      const middle = n * m <= TABLE_LIMIT ? exact : greedy;
+      for (const [i, j] of middle(a.slice(start, endA), b.slice(start, endB), eq))
+        pairs.push([start + i, start + j]);
+    }
+    for (let k = 0; k < a.length - endA; k++)
+      pairs.push([endA + k, endB + k]);
+    return pairs;
+  }
+
+  function exact(a, b, eq) {
     const n = a.length, m = b.length;
     const t = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
     for (let i = n - 1; i >= 0; i--)
@@ -58,6 +83,32 @@ const MdMerge = (() => {
         i++;
       } else {
         j++;
+      }
+    }
+    return pairs;
+  }
+
+  // Walks both lists; where they differ, takes the nearest match a little further on in either.
+  function greedy(a, b, eq) {
+    const LOOK = 64;
+    const pairs = [];
+    for (let i = 0, j = 0; i < a.length && j < b.length;) {
+      if (eq(a[i], b[j])) {
+        pairs.push([i, j]);
+        i++; j++;
+        continue;
+      }
+      let di = -1, dj = -1;
+      for (let k = 1; k <= LOOK && (di < 0 || dj < 0); k++) {
+        if (di < 0 && i + k < a.length && eq(a[i + k], b[j])) di = k;
+        if (dj < 0 && j + k < b.length && eq(a[i], b[j + k])) dj = k;
+      }
+      if (di < 0 && dj < 0) {
+        i++; j++;
+      } else if (dj < 0 || (di >= 0 && di <= dj)) {
+        i += di;
+      } else {
+        j += dj;
       }
     }
     return pairs;
@@ -83,9 +134,17 @@ const MdMerge = (() => {
     return srcOf;
   }
 
+  // the file and the editor's first output do not change while typing: aligned once
+  const aligned = new WeakMap();
+
   // -> {text, replaced: indexes of the file's blocks that were changed or removed}
   function merge(src, base, now) {
-    const srcOf = align(src.blocks, base.blocks);
+    let cached = aligned.get(base);
+    if (!cached || cached.src !== src) {
+      cached = {src, srcOf: align(src.blocks, base.blocks)};
+      aligned.set(base, cached);
+    }
+    const srcOf = cached.srcOf;
     const placed = new Set(srcOf.values());
     // unchanged blocks: the same formatted text before and now
     const pairs = lcs(base.blocks, now.blocks, (x, y) => x.text === y.text);

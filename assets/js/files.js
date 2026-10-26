@@ -122,6 +122,9 @@ const Files = (() => {
 
   // Open: resolves to a location, {picker: true} (use Peergos' picker), or null (cancelled).
   // Save: resolves to a location (a file that may exist), or null.
+  // Where the dialog starts when the caller names no folder: set by the app (the folder of the file opened last).
+  let placeHint = () => null;
+
   function show(mode, suggestedName, near) {
     return new Promise(resolve => {
       state = {mode, grant: null, dir: '', selected: null, resolve};
@@ -134,7 +137,8 @@ const Files = (() => {
       message('');
       d.returnValue = '';
       d.showModal();
-      const start = near && near.kind === 'grant' && usable().some(g => g.grantId === near.grantId) ? near : null;
+      const inGrant = l => l && l.kind === 'grant' && usable().some(g => g.grantId === l.grantId) ? l : null;
+      const start = inGrant(near) || inGrant(placeHint());
       renderRoots();
       if (start)
         go(start.grantId, start.rel.includes('/') ? start.rel.substring(0, start.rel.lastIndexOf('/')) : '');
@@ -319,5 +323,6 @@ const Files = (() => {
     $('fileDialog').addEventListener('cancel', e => { e.preventDefault(); finish(null); });
   }
 
-  return {refreshGrants, grantPath, supported, usable, inGrant, readable, lastingFor, show, wire};
+  return {refreshGrants, grantPath, supported, usable, inGrant, readable, lastingFor, show, wire,
+          setPlaceHint: fn => { placeHint = fn; }};
 })();

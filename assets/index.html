@@ -26,6 +26,9 @@
         <button type="button" role="menuitem" id="saveAsBtn" disabled>Save as… <kbd>Ctrl+Shift+S</kbd></button>
         <button type="button" role="menuitem" id="renameMenuItem" disabled>Rename…</button>
         <hr>
+        <button type="button" role="menuitem" id="findMenuItem" disabled>Find… <kbd>Ctrl+F</kbd></button>
+        <button type="button" role="menuitem" id="replaceMenuItem" disabled>Replace… <kbd>Ctrl+H</kbd></button>
+        <hr>
         <button type="button" role="menuitem" id="importMenuItem" title="A text file from this device becomes a new text, to save in Peergos">Import…</button>
         <button type="button" role="menuitem" id="exportMenuItem" title="Download the text shown to this device" disabled>Export…</button>
         <input type="file" id="importInput" hidden>
@@ -70,6 +73,7 @@
       <button type="button" id="historyPanelBtn" aria-pressed="false" title="Show or hide the edit history">History</button>
     </span>
     <span id="status" class="status" role="status" aria-live="polite"></span>
+    <span id="counts" class="counts" title="Words and characters (without line breaks); of the selection, when there is one"></span>
     <span class="spacer"></span>
     <div class="menu">
       <button type="button" class="menu-button" id="optionsMenuBtn" aria-haspopup="true" aria-expanded="false">Options ▾</button>
@@ -138,6 +142,9 @@
           <input type="checkbox" id="tabsCheck"> Tabs</label>
         <label class="check"><input type="checkbox" id="wrapCheck"> Wrap lines</label>
         <label class="check"><input type="checkbox" id="lineNumbersCheck"> Line numbers</label>
+        <label class="check" title="The browser marks words it does not know (in its own language settings)">
+          <input type="checkbox" id="spellCheck"> Spell check</label>
+        <label class="check" title="Words and characters in the bar"><input type="checkbox" id="countsCheck"> Word count</label>
         <label class="check" title="Keep the steps of editing each open file, for Undo, Redo and the Edit history panel (in memory only, never stored). Off: Undo and Redo use the browser's own undo.">
           <input type="checkbox" id="historyCheck"> Edit history</label>
         <label title="A panel on the right: your notes, or the steps of editing the open file">Side panel
@@ -161,6 +168,22 @@
   </header>
 
   <nav id="tabs" class="tabs" hidden></nav>
+
+  <div id="findBar" class="find-bar" role="search" hidden>
+    <input type="text" id="findInput" placeholder="Find" aria-label="Find" spellcheck="false">
+    <button type="button" id="findPrev" title="Previous (Shift+Enter, Shift+F3)" aria-label="Previous">↑</button>
+    <button type="button" id="findNext" title="Next (Enter, F3)" aria-label="Next">↓</button>
+    <span id="findCount" class="find-count" aria-live="polite"></span>
+    <label class="check" title="Upper and lower case must match"><input type="checkbox" id="findCase"> Aa</label>
+    <label class="check" title="Only whole words"><input type="checkbox" id="findWord"> Whole word</label>
+    <span id="replaceRow" class="replace-row">
+      <input type="text" id="replaceInput" placeholder="Replace with" aria-label="Replace with" spellcheck="false">
+      <button type="button" id="replaceOne" title="Replace this one and go to the next">Replace</button>
+      <button type="button" id="replaceAll">Replace all</button>
+    </span>
+    <span class="spacer"></span>
+    <button type="button" id="findClose" class="find-close" title="Close (Esc)" aria-label="Close">×</button>
+  </div>
 
   <div id="banners" class="banners"></div>
 
@@ -347,7 +370,9 @@
         <p id="startLinkMissing" hidden>The editor cannot tell your Peergos address here. The link is your Peergos
           address followed by <code>/#{"app":"peergoseasyedit","path":"/</code><i>your user name</i><code>","args":{"filename":""}}</code>.</p>
         <h3>Granted folders</h3>
-        <p><b>Open…</b> and <b>Save as…</b> browse the folders you let the editor use. Choose <b>+ Add
+        <p><b>Open…</b> and <b>Save as…</b> browse the folders you let the editor use. <b>Open…</b> starts in the
+          folder of the file you opened last (also on another device); <b>Save as…</b> in the file's own folder, or
+          for a new text in that last folder. Choose <b>+ Add
           folders…</b>: Peergos asks which folders. Peergos remembers them on every device until you remove them
           (× next to the folder, or in the app's details on the Peergos launcher). Your home folder itself cannot be granted,
           the folders in it can. <b>Pick any file with Peergos' picker…</b> opens one file without granting its folder;
@@ -381,6 +406,17 @@
           stay in the editor. Peergos lets the editor rename files only in granted folders; for a file opened from
           elsewhere, rename it in the Drive or grant its folder first. A new text just gets the name it will be
           saved under.</p>
+        <h3>Typing, finding and counting</h3>
+        <p><b>Tab</b> types a tab; with several lines selected it indents them all, and <b>Shift+Tab</b> takes one
+          indent away. To leave the text with the keyboard, press Escape and then Tab.</p>
+        <p><b>Ctrl+F</b> (or <b>File → Find…</b>) finds text: <b>Enter</b> or ↓ goes to the next match,
+          <b>Shift+Enter</b> or ↑ to the one before (also F3 and Shift+F3); <b>Aa</b> makes upper and lower case
+          count, <b>Whole word</b> skips words that only contain it. <b>Ctrl+H</b> (<b>File → Replace…</b>) also
+          replaces: one at a time or all at once; Undo takes it back. Escape closes it. In a Markdown or HTML file
+          shown formatted, Ctrl+F is the browser's own search of the page; Find… and Replace… switch to Source.</p>
+        <p>The bar shows how many words and characters the text has (line breaks not counted), and of the selection
+          when there is one; <b>Options → Word count</b> hides it. <b>Options → Spell check</b> lets the browser mark
+          words it does not know.</p>
         <h3>Undo and redo</h3>
         <p>↶ and ↷ in the bar, or Ctrl+Z and Ctrl+Y (also Ctrl+Shift+Z). Typing without a pause counts as one step.
           A restored draft or "their version" after a conflict can be undone the same way. <b>Options → Side panel →
@@ -420,7 +456,7 @@
           back.</p>
         <p><b>Options → Formatting buttons</b> puts buttons in the bar: bold, italic, struck out, headings H1–H3,
           bulleted and numbered list, task list, quote, code, code block, link, table, picture and line. Formatted
-          they format; in Source they write the Markdown for you. The picture button lets you choose a picture in your
+          they format; in Source they write the Markdown for you (also Ctrl+B and Ctrl+I). The picture button lets you choose a picture in your
           folders and writes its address relative to the file. With these buttons on, every text file has them and
           the <b>Formatted</b> button too, so any text can be written as Markdown; it opens as text, a
           <code>.md</code> file opens formatted.</p>
@@ -429,7 +465,14 @@
           in the formatted view: it is kept exactly, and edited in Source. The formatted editor cannot keep HTML in a
           part you change; it says so, and Undo brings the part back. Ctrl+click opens a link. Pictures and links to
           other files work when they are in a folder you let the editor use; pictures from other web sites cannot be
-          shown inside Peergos. A Markdown file the editor cannot change is shown formatted, read-only.</p>
+          shown inside Peergos. A Markdown file the editor cannot change is shown formatted, read-only. A very
+          large Markdown file (over 400 000 characters) opens as text, because the formatted view would take long to
+          appear; <b>Formatted</b> shows it anyway.</p>
+        <h3>HTML files</h3>
+        <p>An HTML file (<code>.html</code>, <code>.htm</code>) opens as a browser shows it, as Peergos' own viewer
+          does: its styles, its pictures and stylesheets from folders you let the editor use, its links (to files in
+          those folders: they open in the editor). Its scripts are not run, and nothing is loaded from other web
+          sites. <b>Source</b> shows the HTML text to edit it; <b>Preview</b> shows the page again.</p>
         <h3>Text encoding and line endings</h3>
         <p>Files are read and written as UTF-8. A file that is not valid UTF-8 opens read-only, so it cannot be
           damaged. Windows line endings (CR LF) and a UTF-8 byte order mark are kept as they were.</p>
@@ -464,6 +507,13 @@
         <p>A simple text editor for files in your Peergos Drive. Version <span id="aboutVersion"></span>.</p>
         <p>Free software under the GNU General Public License, version 3 or later.</p>
         <h3>History</h3>
+        <h4>1.5.0 (2026-10-26)</h4>
+        <ul>
+          <li>HTML files open as a page (without their scripts); Source shows the HTML text.</li>
+          <li>Find and Replace (Ctrl+F, Ctrl+H); Tab indents; word count in the bar; Options → Spell check;
+            Ctrl+B and Ctrl+I in Markdown Source.</li>
+          <li>Open… starts in the folder of the file opened last. Big Markdown files stay smooth to edit formatted.</li>
+        </ul>
         <h4>1.4.0 (2026-10-25)</h4>
         <ul>
           <li>Markdown files open formatted and are edited as they look; Source shows the exact text. Only the parts

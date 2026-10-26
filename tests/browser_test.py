@@ -239,6 +239,12 @@ def main():
         config(delay={}); app.close()
 
         print('4. a file that could not be read is never shown empty or saved over', flush=True)
+        # the page closed above had unsaved changes: it keeps them as a draft (written with the 1.5 s delay set there) -
+        # let that write land before the reset, or the draft is offered back below and the editor waits, read-only
+        try:
+            wait(lambda: drafts(), 'the draft of the page closed above', 5)
+        except TimeoutError:
+            pass
         reset(); put_file(doc, b'precious\n'); config(fail={'GET': 500})
         app = App(ctx, doc)
         ok('error banner', any('could not be opened' in b for b in app.banners()), app.banners())
@@ -250,7 +256,9 @@ def main():
             wait(lambda: app.text() == 'precious\n' and not app.readonly(), 'the file to open', 5)
         except TimeoutError:
             pass
-        ok('Try again opens it', app.text() == 'precious\n' and not app.readonly(), (app.text(), app.readonly()))
+        ok('Try again opens it', app.text() == 'precious\n' and not app.readonly(), (app.text(), app.readonly(), app.ev(
+           "(() => { const d = active; return {docs: docs.length, loaded: d.loaded, readOnly: d.readOnly, restoreOpen: d.restoreOpen, "
+           "areaRO: d.area.readOnly, editorIsActive: document.getElementById('editor') === d.area, banners: [...document.querySelectorAll('.banner p')].map(p => p.textContent.slice(0, 80))}; })()")))
         app.close()
         app = App(ctx, '/alice/docs/missing.txt')
         ok('missing file: says so, Save off', any('not found' in b for b in app.banners()) and app.ev("document.getElementById('saveBtn').disabled"), app.banners())
@@ -587,7 +595,10 @@ def main():
         ok('Save of a new text opens Save as', app.dialog_open('fileDialog'))
         app.ev("document.getElementById('fdName').value = 'brand new.txt'; document.getElementById('fdName').dispatchEvent(new Event('input')); document.getElementById('fdOk').click()")
         app.wait_idle(); time.sleep(0.5)
-        ok('saved into the granted folder, draft gone', server_file('/alice/Documents/brand new.txt') == b'a brand new text\n' and drafts() == [], drafts())
+        # Save as… of a new text starts in the folder of the file opened last: the first of the recent files
+        last_folder = data_json('recent.json')[0]['folder']
+        ok('saved into the folder of the file opened last, draft gone', server_file(last_folder + '/brand new.txt') == b'a brand new text\n' and
+           drafts() == [], (last_folder, [p for p in mock_peergos.FILES if 'brand' in p], drafts()))
         config(pickFile='/alice/elsewhere/loose.txt'); put_file('/alice/elsewhere/loose.txt', b'loose\n')
         app.menu('openMenuItem'); time.sleep(0.4)
         app.ev("document.getElementById('fdPicker').click()"); time.sleep(0.8)
@@ -1027,7 +1038,8 @@ def main():
         put_file('/alice/Notes/plain.txt', b'plain\n')
         put_file('/alice/Notes/latin.md', '# Café\n\nNot UTF-8.\n'.encode('latin-1'))
         app = App(fresh_ctx(), None)
-        open_md = lambda rel: app.ev("r => openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: r})", rel)
+        # started, not waited for: opening may first ask about unsaved changes (discard_if_asked answers)
+        open_md = lambda rel: app.ev("r => { setTimeout(() => openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: r}), 0); }", rel)
         open_md('plain.txt'); time.sleep(0.6)
         ok('a text file: no Markdown buttons', app.ev("document.getElementById('mdButtons').hidden"))
         open_md('notes.md')
@@ -1152,8 +1164,11 @@ def main():
         app.page.keyboard.press('Escape')
         scroller = "document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror')"
         app.ev(scroller + ".scrollTop = 1500"); time.sleep(0.3)
-        box = app.page.locator('.md-edit .toastui-editor-ww-container .ProseMirror').bounding_box()
-        app.page.mouse.click(box['x'] + 200, box['y'] + box['height'] / 2); time.sleep(0.2)
+        # click on the text of a paragraph in view (a click between paragraphs would start a new one)
+        spot = app.ev("""(() => { const sc = document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror'), r0 = sc.getBoundingClientRect();
+            const p = [...sc.querySelectorAll('p')].find(p => { const r = p.getBoundingClientRect(); return r.top > r0.top + r0.height / 3; });
+            const r = p.getBoundingClientRect(); return [r.left + 20, r.top + r.height / 2]; })()""")
+        app.page.mouse.click(spot[0], spot[1]); time.sleep(0.2)
         top = app.ev(scroller + ".scrollTop")
         for ch in 'typed here':
             app.page.keyboard.type(ch); time.sleep(0.25)
@@ -1205,6 +1220,171 @@ def main():
         ok('under Peergos\' Content-Security-Policy: formatted editing, math and the read-only view work, nothing else is blocked',
            v == ['connect-src http://127.0.0.2:9/x'] and not page_errors, (v, page_errors))
         ctx.close()
+
+        print('17. HTML files shown as a page; Open… starts where the last file was opened', flush=True)
+        reset()
+        grant('/alice/Web')
+        put_file('/alice/Web/page.html', b'<!DOCTYPE html><html><head><title>T</title><link rel="stylesheet" href="css/site.css">'
+                 b'<style>h1 { color: rgb(200, 0, 0); }</style></head><body><h1 id="top">Hello page</h1>'
+                 b'<p class="g">Green text</p><img src="pics/dot.png" alt="dot"><a href="notes.txt">notes</a>'
+                 b'<a href="https://example.org/">web</a><script>window.ran = 1; document.body.append("SCRIPT RAN")</script></body></html>')
+        put_file('/alice/Web/css/site.css', b'.g { color: rgb(0, 128, 0); }')
+        put_file('/alice/Web/pics/dot.png', bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010806000000'
+                 '1f15c4890000000d49444154789c6360f8cfc0f01f0005fe02fea7d4c1a40000000049454e44ae426082'))
+        put_file('/alice/Web/notes.txt', b'notes\n')
+        put_file('/alice/Web/deep/inner/last.txt', b'last\n')
+        app = App(fresh_ctx(), None)
+        app.ev("openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'page.html'})")
+        wait(lambda: app.ev("(() => { const f = document.querySelector('.md-html'); return !!(f && f.contentDocument && f.contentDocument.querySelector('h1')); })()"),
+             'the HTML preview', 15)
+        time.sleep(1.2)
+        frame = lambda js: app.ev("() => { const d = document.querySelector('.md-html').contentDocument; return " + js + "; }")
+        ok('an HTML file opens as a page; the button offers its Source', frame("d.querySelector('h1').textContent") == 'Hello page' and
+           app.ev("document.getElementById('editor').hidden") and app.ev("document.getElementById('mdModeBtn').textContent") == 'Source')
+        ok('its own styles and its stylesheet from the granted folder apply', frame("getComputedStyle(d.querySelector('h1')).color") == 'rgb(200, 0, 0)' and
+           frame("getComputedStyle(d.querySelector('.g')).color") == 'rgb(0, 128, 0)', (frame("getComputedStyle(d.querySelector('.g')).color")))
+        ok('its picture from the granted folder is shown', frame("d.querySelector('img').src").startswith('blob:'))
+        ok('its scripts do not run, and the editor says so', frame("!d.defaultView.ran && !d.body.textContent.includes('SCRIPT RAN')") and
+           any('scripts' in b for b in app.banners()), app.banners())
+        ok('no formatting buttons for HTML', app.ev("document.getElementById('mdTools').hidden"))
+        app.page.click('#mdModeBtn'); time.sleep(0.3)
+        ok('Source: the exact text, editable; the button says Preview', not app.ev("document.getElementById('editor').hidden") and
+           app.text().startswith('<!DOCTYPE html>') and app.ev("document.getElementById('mdModeBtn').textContent") == 'Preview')
+        app.type_text(app.text().replace('Hello page', 'Hello edited'))
+        app.page.click('#mdModeBtn')
+        wait(lambda: app.ev("(() => { const f = document.querySelector('.md-html'); return !!f && !f.hidden && !!f.contentDocument.querySelector('h1') && f.contentDocument.querySelector('h1').textContent === 'Hello edited'; })()"),
+             'the preview of the edited text', 10)
+        ok('Preview shows the edited text', True)
+        app.save(); app.wait_idle()
+        ok('and Save writes it', b'Hello edited' in server_file('/alice/Web/page.html'))
+        time.sleep(0.6)
+        app.ev("[...document.querySelector('.md-html').contentDocument.querySelectorAll('a')].find(a => a.textContent === 'notes').click()")
+        time.sleep(1.0)
+        ok('a link in the page to a file in the granted folder opens it in the editor', app.ev("document.getElementById('docName').textContent") == 'notes.txt')
+        ok('no script errors', not app.errors, app.errors)
+
+        app.ev("openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'deep/inner/last.txt'})"); time.sleep(1.5)
+        app.close()
+        app = App(fresh_ctx(), None)                 # another device, nothing open
+        app.ev("document.getElementById('closeMenuItem').click()"); time.sleep(0.4)
+        if app.dialog_open('choiceDialog'):
+            app.ev("document.getElementById('choiceDialog').close('discard')"); time.sleep(0.5)
+        app.menu('openMenuItem'); time.sleep(0.6)
+        ok('Open… starts in the folder of the file opened last (also on another device)',
+           app.ev("document.getElementById('fdCrumbs').textContent").endswith('inner') and 'last.txt' in ' '.join(app.fd_rows()),
+           (app.ev("document.getElementById('fdCrumbs').textContent"), app.fd_rows()))
+        app.ev("document.getElementById('fdCancel').click()"); time.sleep(0.3)
+        app.menu('newMenuItem'); time.sleep(0.4)
+        app.type_text('new text\n')
+        app.save(); time.sleep(0.6)
+        ok('Save as… of a new text starts there too', app.dialog_open('fileDialog') and
+           app.ev("document.getElementById('fdCrumbs').textContent").endswith('inner'))
+        app.ev("document.getElementById('fdCancel').click()"); time.sleep(0.3)
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
+
+        print('18. Tab, Find and Replace, word count, spell check, Ctrl+B / Ctrl+I, big Markdown files', flush=True)
+        reset()
+        grant('/alice/W')
+        put_file('/alice/W/t.txt', b'one\ntwo\nthree\n')
+        app = App(fresh_ctx(), None)
+        app.ev("openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 't.txt'})"); time.sleep(0.8)
+        area = "document.getElementById('editor')"
+        app.page.focus('#editor')
+        app.ev(area + ".setSelectionRange(0, 0)")
+        app.page.keyboard.press('Tab')
+        ok('Tab types a tab', app.text() == '\tone\ntwo\nthree\n' and app.ev("document.activeElement === " + area), app.text())
+        app.ev(area + ".setSelectionRange(5, 12)")      # "two" and "three"
+        app.page.keyboard.press('Tab')
+        ok('Tab with lines selected indents each of them', app.text() == '\tone\n\ttwo\n\tthree\n', app.text())
+        app.page.keyboard.press('Shift+Tab'); app.page.keyboard.press('Shift+Tab')
+        ok('Shift+Tab takes it back', app.text() == '\tone\ntwo\nthree\n', app.text())
+        app.page.keyboard.press('Control+z'); time.sleep(0.2)
+        ok('and can be undone', app.text() == '\tone\n\ttwo\n\tthree\n', app.text())
+        app.page.keyboard.press('Escape'); app.page.keyboard.press('Tab'); time.sleep(0.2)
+        ok('after Escape, Tab moves on (keyboard users)', app.ev("document.activeElement !== " + area) and app.text() == '\tone\n\ttwo\n\tthree\n')
+
+        text = ('The quick brown fox jumps. ' * 3 + '\n') * 60 + 'A fox at the end, foxes too, FOX in capitals.\n'
+        app.type_text(text); time.sleep(0.3)
+        app.page.focus('#editor'); app.ev(area + ".setSelectionRange(0, 0)")
+        app.page.keyboard.press('Control+f'); time.sleep(0.3)
+        ok('Ctrl+F opens Find, the cursor in it', not app.ev("document.getElementById('findBar').hidden") and
+           app.ev("document.activeElement.id") == 'findInput' and app.ev("document.getElementById('replaceRow').hidden"))
+        app.page.keyboard.type('fox'); time.sleep(0.3)
+        count = lambda: app.ev("document.getElementById('findCount').textContent")
+        ok('matches counted, the first selected', count() == '1 of 183' and app.ev(area + ".selectionStart") == 16, (count(), app.ev(area + ".selectionStart")))
+        app.page.keyboard.press('Enter'); time.sleep(0.2)
+        ok('Enter: the next', count() == '2 of 183' and app.ev(area + ".selectionStart") == 43, (count(), app.ev(area + ".selectionStart")))
+        app.page.keyboard.press('Shift+Enter'); time.sleep(0.2)
+        ok('Shift+Enter: the one before', count() == '1 of 183')
+        app.page.keyboard.press('Shift+Enter'); time.sleep(0.3)
+        ok('before the first: the last (at the end of the text)', count() == '183 of 183', count())
+        hit = app.ev("""(() => { const b = document.querySelector('.find-hit'), a = document.getElementById('editor'); if (!b) return null;
+            const r = b.getBoundingClientRect(), ar = a.getBoundingClientRect(); return [r.top >= ar.top && r.bottom <= ar.bottom, a.scrollTop, r.width > 0]; })()""")
+        ok('the match is marked and scrolled into view while typing in Find', hit and hit[0] and hit[1] > 0 and hit[2], hit)
+        app.ev("const c = document.getElementById('findCase'); c.checked = true; c.dispatchEvent(new Event('change'))"); time.sleep(0.2)
+        ok('Aa: upper and lower case must match', count().endswith('of 182'), count())
+        app.ev("const c = document.getElementById('findWord'); c.checked = true; c.dispatchEvent(new Event('change'))"); time.sleep(0.2)
+        ok('Whole word: "foxes" does not count', count().endswith('of 181'), count())
+        app.ev("for (const id of ['findCase', 'findWord']) { const c = document.getElementById(id); c.checked = false; c.dispatchEvent(new Event('change')); }")
+        app.page.keyboard.press('Escape'); time.sleep(0.2)
+        ok('Escape closes Find, back to the text', app.ev("document.getElementById('findBar').hidden") and app.ev("document.activeElement === " + area) and
+           app.ev("document.querySelectorAll('.find-hit').length") == 0)
+
+        app.type_text('red fox, red fox, blue fox\n'); time.sleep(0.2)
+        app.page.focus('#editor'); app.ev(area + ".setSelectionRange(0, 0)")
+        app.page.keyboard.press('Control+h'); time.sleep(0.3)
+        ok('Ctrl+H opens Replace', not app.ev("document.getElementById('replaceRow').hidden"))
+        app.ev("document.getElementById('findInput').value = 'fox'; document.getElementById('findInput').dispatchEvent(new Event('input'))"); time.sleep(0.2)
+        app.ev("document.getElementById('replaceInput').value = 'cat'")
+        app.page.click('#replaceOne'); time.sleep(0.3)
+        ok('Replace: this one, then on to the next', app.text() == 'red cat, red fox, blue fox\n' and count() == '1 of 2', (app.text(), count()))
+        app.page.click('#replaceAll'); time.sleep(0.4)
+        ok('Replace all', app.text() == 'red cat, red cat, blue cat\n' and '2 replaced' in app.ev("document.getElementById('toast').textContent"), app.text())
+        app.page.focus('#editor'); app.page.keyboard.press('Control+z'); time.sleep(0.3)
+        ok('Undo takes Replace all back', app.text() == 'red cat, red fox, blue fox\n', app.text())
+        app.page.keyboard.press('Escape'); time.sleep(0.1)
+
+        app.type_text('Hello world, it’s a test.\nSecond line \U0001F600\n'); time.sleep(0.5)
+        counts = lambda: app.ev("document.getElementById('counts').textContent")
+        ok('word count in the bar (line breaks and an emoji counted right)', counts() == '7 words · 38 characters', counts())
+        app.page.focus('#editor'); app.ev(area + ".setSelectionRange(0, 11)"); time.sleep(0.5)
+        ok('of the selection, when there is one', counts() == '2 of 7 words · 11 of 38 characters', counts())
+        app.ev("const c = document.getElementById('countsCheck'); c.checked = false; c.dispatchEvent(new Event('change'))"); time.sleep(0.4)
+        ok('Options → Word count off hides it', app.ev("document.getElementById('counts').hidden"))
+        app.ev("const c = document.getElementById('spellCheck'); c.checked = true; c.dispatchEvent(new Event('change'))"); time.sleep(1.0)
+        ok('Options → Spell check on: the text is checked, the setting kept', app.ev(area + ".spellcheck") is True and
+           data_json('settings.json')['spellcheck'] is True and data_json('settings.json')['counts'] is False)
+        app.page.keyboard.press('Control+b'); time.sleep(0.2)
+        ok('Ctrl+B in a plain text file does nothing', app.text().startswith('Hello world'))
+
+        put_file('/alice/W/m.md', b'# Title\n\nsome words here\n')
+        app.save(); app.wait_idle()          # t.txt saved: opening another file does not ask about it
+        app.ev("setTimeout(() => openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'm.md'}), 0)")
+        wait(lambda: app.ev("!!document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror[contenteditable=true]')"), 'm.md formatted', 15)
+        if app.dialog_open('choiceDialog'):
+            app.ev("document.getElementById('choiceDialog').close('discard')"); time.sleep(0.5)
+        time.sleep(0.4)
+        ok('the formatted editor checks spelling too', app.ev("document.querySelector('.md-edit .toastui-editor-ww-container .ProseMirror').getAttribute('spellcheck')") == 'true')
+        app.menu('findMenuItem'); time.sleep(0.4)
+        ok('Find… on a formatted Markdown file searches its text (Source)', not app.ev("document.getElementById('editor').hidden") and
+           not app.ev("document.getElementById('findBar').hidden"))
+        app.page.keyboard.press('Escape'); time.sleep(0.1)
+        app.ev(area + ".focus(); " + area + ".setSelectionRange(9, 13)")       # "some"
+        app.page.keyboard.press('Control+b'); time.sleep(0.2)
+        app.ev(area + ".setSelectionRange(" + str(len('# Title\n\n**some** ')) + ", " + str(len('# Title\n\n**some** words')) + ")")
+        app.page.keyboard.press('Control+i'); time.sleep(0.2)
+        ok('Ctrl+B and Ctrl+I in Markdown Source', app.text() == '# Title\n\n**some** *words* here\n', app.text())
+        app.save(); app.wait_idle()
+
+        big = ('Paragraph with words. ' * 12 + '\n\n') * 1600
+        put_file('/alice/W/big.md', big.encode())
+        app.ev("setTimeout(() => openLoc({kind: 'grant', grantId: Files.usable()[0].grantId, rel: 'big.md'}), 0)"); time.sleep(1.5)
+        ok('a big Markdown file (over 400 000 characters) opens as text, and says why',
+           not app.ev("document.getElementById('editor').hidden") and app.ev("document.getElementById('mdModeBtn').textContent") == 'Formatted' and
+           any('large' in b for b in app.banners()), app.banners())
+        ok('no script errors', not app.errors, app.errors)
+        app.close()
 
         browser.close()
     print('\n%s' % ('ALL PASSED' if not failures else '%d FAILED: %s' % (len(failures), ', '.join(failures))), flush=True)

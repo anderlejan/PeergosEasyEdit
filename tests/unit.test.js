@@ -232,6 +232,30 @@ test('Markdown: positions that do not cut the text exactly are refused', () => {
   assert.strictEqual(MdMerge.split('abc', [{type: 'paragraph', sourcepos: [[2, 1], [2, 3]]}]), null);
   assert.strictEqual(MdMerge.split('ab\ncd', [{type: 'p', sourcepos: [[1, 1], [1, 2]]}, {type: 'p', sourcepos: [[1, 2], [2, 2]]}]), null);
 });
+test('Markdown: a big file (6000 blocks) with one block edited - exact and quick', () => {
+  const file = Array.from({length: 6000}, (_, i) => i % 3 ? 'Paragraph __' + i + '__ text.' : '* item ' + i).join('\n\n') + '\n';
+  const t0 = Date.now();
+  const r = mdEdit(file, t => t.replace('Paragraph **3001** text.', 'Paragraph **3001** text, edited.'));
+  const ms = Date.now() - t0;
+  assert.strictEqual(r.text, file.replace('Paragraph __3001__ text.', 'Paragraph **3001** text, edited.'));
+  assert(ms < 1500, 'took ' + ms + ' ms');
+});
+test('Markdown: the block comparison finds as many matches as the exact one', () => {
+  let seed = 7;
+  const rnd = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+  for (let round = 0; round < 200; round++) {
+    const a = Array.from({length: rnd(12)}, () => rnd(5)), b = Array.from({length: rnd(12)}, () => rnd(5));
+    const pairs = MdMerge.lcs(a, b, (x, y) => x === y);
+    assert(pairs.every(([i, j]) => a[i] === b[j]));
+    assert(pairs.every((p, k) => k === 0 || (p[0] > pairs[k - 1][0] && p[1] > pairs[k - 1][1])));
+    // the exact length by plain dynamic programming
+    const t = Array.from({length: a.length + 1}, () => new Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--)
+      for (let j = b.length - 1; j >= 0; j--)
+        t[i][j] = a[i] === b[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    assert.strictEqual(pairs.length, t[0][0], JSON.stringify([a, b]));
+  }
+});
 test('Markdown: a block ending at column 0 ends with the line before', () => {
   const parts = MdMerge.split('- a\n- b\n\nx', [{type: 'list', sourcepos: [[1, 1], [3, 0]]}, {type: 'paragraph', sourcepos: [[4, 1], [4, 1]]}]);
   assert.deepStrictEqual(parts.blocks.map(b => b.text), ['- a\n- b', 'x']);

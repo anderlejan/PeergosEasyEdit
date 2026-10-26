@@ -9,12 +9,16 @@
  * as it is in the file. Math ($…$, $$…$$, \(…\), \[…\]) is shown with KaTeX: in the formatted editor each formula is
  * one piece that keeps its exact source (edited in Source). H~2~O and X^2^ show as sub- and superscript. Pictures and
  * links to other files work inside granted folders - the app may read nothing else. The libraries are loaded with the
- * first Markdown file. */
+ * first Markdown file. An HTML file opens as a browser shows it (Preview, without its scripts); Source is its text. */
 'use strict';
 
 const Markdown = (() => {
   const EXT = /\.(md|markdown|mdown|mkd|mkdn)$/i;
+  const HTML_EXT = /\.(html?|xhtml)$/i;
   const MERGE_DELAY_MS = 200;
+  // The formatted editor (Toast UI) takes long to load big files - 1.8 s for 0.35 MB, 10 s for 0.58 MB (measured
+  // 2026-10-26): a Markdown file bigger than this opens as text; Formatted is one click away.
+  const LARGE_CHARS = 400000;
   const HTML_TAG = /<[A-Za-z!/][^>]*>/;
   const MATH_TOKEN = /PEEMATH([DI])(\d+)X/g;
   // H~2~O (not ~~struck out~~) and X^2^, as Pandoc writes them
@@ -24,8 +28,9 @@ const Markdown = (() => {
   let Parser = null;        // the editor's Markdown parser (ToastMark), to cut texts into blocks
 
   const isMd = doc => !!doc && EXT.test(doc.name);
+  const isHtml = doc => !!doc && HTML_EXT.test(doc.name);
   // a file shown with the Markdown buttons: a .md file, or any text while the formatting buttons are on
-  const usable = doc => !!doc && doc.loaded && (isMd(doc) || App.settings.mdTools);
+  const usable = doc => !!doc && doc.loaded && (isMd(doc) || isHtml(doc) || App.settings.mdTools);
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -63,7 +68,12 @@ const Markdown = (() => {
       const box = el('div', {className: 'md-box'});
       box.hidden = true;
       doc.area.after(box);
-      doc.md = {view: isMd(doc) ? 'formatted' : 'source', box, mode: null, shown: null, viewer: null, viewerEl: null, editor: null,
+      const large = isMd(doc) && doc.area.value.length > LARGE_CHARS;
+      if (large)
+        Docs.showBanner(doc, 'md', 'info', 'This Markdown file is large (' + Math.round(doc.area.value.length / 1000) +
+                        ' thousand characters), so it opens as text: the formatted view can take a while to appear.',
+                        [['OK', () => Docs.hideBanner(doc, 'md')]]);
+      doc.md = {view: (isMd(doc) || isHtml(doc)) && !large ? 'formatted' : 'source', box, mode: null, shown: null, viewer: null, viewerEl: null, editor: null,
                 editorEl: null, src: null, base: null, math: [], timer: null, urls: new Map(), warned: false,
                 unsafe: false};
       wireBox(doc);
@@ -95,19 +105,25 @@ const Markdown = (() => {
     const st = md ? state(doc) : null;
     const source = !!st && st.view === 'source';
     const btn = $('mdModeBtn');
-    btn.textContent = source ? 'Formatted' : 'Source';
-    btn.title = source ? 'Back to the formatted view, where you edit the text as it looks'
-                       : 'The Markdown text itself, exactly as it is in the file';
+    const html = isHtml(doc);
+    btn.textContent = source ? (html ? 'Preview' : 'Formatted') : 'Source';
+    btn.title = source ? (html ? 'The page as a browser shows it' : 'Back to the formatted view, where you edit the text as it looks')
+                       : 'The text itself, exactly as it is in the file';
     btn.setAttribute('aria-pressed', String(source));
-    $('mdTools').hidden = !md || !App.settings.mdTools || !canEdit(doc) || (!source && st.mode === 'view');
+    $('mdTools').hidden = !md || html || !App.settings.mdTools || !canEdit(doc) || (!source && st.mode === 'view');
   }
 
   /* ---------- formatted: the formatted editor, or read-only for a file that cannot be edited ---------- */
 
   function render(doc) {
     const st = doc.md;
-    const mode = canEdit(doc) && !st.unsafe ? 'edit' : 'view';
     const text = doc.area.value;
+    if (isHtml(doc)) {
+      if (st.mode !== 'html' || st.shown !== text)
+        showHtml(doc, text);
+      return;
+    }
+    const mode = canEdit(doc) && !st.unsafe ? 'edit' : 'view';
     if (st.mode === mode && st.shown === text)
       return;
     if (!window.toastui) {
@@ -144,6 +160,8 @@ const Markdown = (() => {
     }
     if (st.editorEl)
       st.editorEl.hidden = true;
+    if (st.htmlEl)
+      st.htmlEl.hidden = true;
     st.viewerEl.hidden = false;
     const {md, math} = extractMath(text);
     st.viewer.setMarkdown(md);
@@ -180,6 +198,8 @@ const Markdown = (() => {
     }
     if (st.viewerEl)
       st.viewerEl.hidden = true;
+    if (st.htmlEl)
+      st.htmlEl.hidden = true;
     st.editorEl.hidden = false;
     clearTimeout(st.timer);
     st.timer = null;
@@ -194,10 +214,10 @@ const Markdown = (() => {
     st.editor.setMarkdown(md, false);
     if (scroller)
       scroller.scrollTop = top;
+    st.nodeMd = new WeakMap();
     st.src = split(text, st.editor);
-    const base = split(st.editor.getMarkdown(), st.editor);
-    st.base = base && restore(st, base);
-    if (!st.src || !st.base) {
+    st.base = restore(st, editorParts(st));
+    if (!st.src) {
       // the parser's positions do not fit the text: formatted editing could change parts nobody touched
       st.unsafe = true;
       Docs.showBanner(doc, 'md', 'info', 'This file cannot be edited formatted without changing parts of it you do ' +
@@ -207,6 +227,7 @@ const Markdown = (() => {
     }
     st.mode = 'edit';
     st.shown = text;
+    spellcheck();
   }
 
   // The formatted editor's Markdown made comparable with the file's: its formulas back as they were written, and
@@ -221,6 +242,26 @@ const Markdown = (() => {
     const view = st.editor && st.editor.wwEditor && st.editor.wwEditor.view;
     if (view)
       view.dispatch(view.state.tr.setMeta('peeRedraw', true));
+  }
+
+  // The formatted editor's Markdown, block by block. Each top-level block is converted once and kept until it
+  // changes (ProseMirror keeps an unchanged block as the same object): converting the whole of a big file after
+  // every pause took 140 ms for 0.2 MB (2026-10-26). Block kinds named as the Markdown parser names them.
+  const BLOCK_KINDS = {bulletList: 'list', orderedList: 'list'};
+
+  function editorParts(st) {
+    const pmDoc = st.editor.wwEditor.view.state.doc;
+    const blocks = [];
+    pmDoc.forEach(node => {
+      let md = st.nodeMd.get(node);
+      if (md === undefined) {
+        md = st.editor.convertor.toMarkdownText(pmDoc.type.create(null, node)).replace(/\n+$/, '');
+        st.nodeMd.set(node, md);
+      }
+      if (md.trim())
+        blocks.push({type: BLOCK_KINDS[node.type.name] || node.type.name, text: md});
+    });
+    return {blocks, seps: []};
   }
 
   // A text cut into top-level blocks by the editor's own Markdown parser (ToastMark), used on its own: a hidden
@@ -246,10 +287,7 @@ const Markdown = (() => {
     // formatted editor holds is older and must not be written back; it is loaded again when shown
     if (doc.area.value !== st.shown)
       return;
-    const now = split(st.editor.getMarkdown(), st.editor);
-    if (!now)
-      return;
-    const r = MdMerge.merge(st.src, st.base, restore(st, now));
+    const r = MdMerge.merge(st.src, st.base, restore(st, editorParts(st)));
     const old = doc.area.value;
     if (r.text === old)
       return;
@@ -261,6 +299,79 @@ const Markdown = (() => {
       Docs.showBanner(doc, 'md', 'info', 'A part you changed had HTML in it, which the formatted editor cannot keep. ' +
                       'Undo brings it back; in Source you can edit it with its HTML.', [['OK', () => Docs.hideBanner(doc, 'md')]]);
     }
+  }
+
+  /* ---------- HTML files: the page as a browser shows it ---------- */
+
+  // In a frame without scripts, forms or pop-ups (sandbox), under the app's own Content-Security-Policy: nothing is
+  // loaded from other web sites. Only the editor itself looks inside (allow-same-origin, no allow-scripts) to show
+  // pictures and stylesheets from the granted folders and to follow links, as in Markdown.
+  function showHtml(doc, text) {
+    const st = doc.md;
+    if (!st.htmlEl) {
+      st.htmlEl = el('iframe', {className: 'md-html', title: 'Preview'});
+      st.htmlEl.setAttribute('sandbox', 'allow-same-origin');
+      st.box.append(st.htmlEl);
+    }
+    for (const e of [st.viewerEl, st.editorEl])
+      if (e)
+        e.hidden = true;
+    for (const p of st.box.querySelectorAll('.md-loading'))
+      p.remove();
+    st.htmlEl.hidden = false;
+    const page = new DOMParser().parseFromString(text, 'text/html');
+    const scripts = page.querySelectorAll('script');
+    for (const e of [...scripts, ...page.querySelectorAll('base')])
+      e.remove();
+    for (const img of page.querySelectorAll('img[src]')) {
+      img.setAttribute('data-pee-src', img.getAttribute('src'));
+      img.removeAttribute('src');
+    }
+    for (const link of page.querySelectorAll('link[href]')) {
+      link.setAttribute('data-pee-href', link.getAttribute('href'));
+      link.removeAttribute('href');
+    }
+    st.htmlEl.onload = () => decorateHtml(doc, st.htmlEl);
+    st.htmlEl.srcdoc = '<!DOCTYPE html>' + page.documentElement.outerHTML;
+    st.mode = 'html';
+    st.shown = text;
+    if (scripts.length && !st.warned) {
+      st.warned = true;
+      Docs.showBanner(doc, 'md', 'info', 'This page has scripts; the preview does not run them.',
+                      [['OK', () => Docs.hideBanner(doc, 'md')]]);
+    }
+  }
+
+  function decorateHtml(doc, frame) {
+    const page = frame.contentDocument;
+    if (!page)
+      return;
+    for (const img of page.querySelectorAll('img[data-pee-src]'))
+      showPicture(doc, img.getAttribute('data-pee-src'), img);
+    for (const link of page.querySelectorAll('link[data-pee-href]')) {
+      if (!/\bstylesheet\b/i.test(link.getAttribute('rel') || ''))
+        continue;
+      const path = pathOf(doc, link.getAttribute('data-pee-href'));
+      const loc = path && Files.readable(path);
+      if (loc)
+        Peergos.readUrl(Loc.url(loc)).then(bytes => {
+          link.replaceWith(Object.assign(page.createElement('style'), {textContent: TextCodec.decode(bytes).text}));
+        }).catch(() => {});
+    }
+    page.addEventListener('click', e => {
+      const a = e.target.closest && e.target.closest('a[href]');
+      if (!a)
+        return;
+      e.preventDefault();
+      const href = a.getAttribute('href');
+      if (href.startsWith('#')) {
+        const target = page.getElementById(href.slice(1)) || page.getElementsByName(href.slice(1))[0];
+        if (target)
+          target.scrollIntoView();
+        return;
+      }
+      follow(doc, href);
+    });
   }
 
   /* ---------- inside the formatted editor: pictures, formulas, sub- and superscript ---------- */
@@ -685,6 +796,27 @@ const Markdown = (() => {
 
   /* ---------- wiring ---------- */
 
+  // Ctrl+B and Ctrl+I in the Markdown text (Source), as in the formatted view
+  function sourceKey(doc, e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || !usable(doc) || isHtml(doc) || !canEdit(doc) ||
+        state(doc).view !== 'source')
+      return;
+    const k = e.key.toLowerCase();
+    if (k === 'b' || k === 'i') {
+      e.preventDefault();
+      sourceTool(doc, k === 'b' ? 'bold' : 'italic');
+    }
+  }
+
+  // Options → Spell check, also in the formatted editor
+  function spellcheck() {
+    for (const d of docs) {
+      const pm = d.md && d.md.editorEl && d.md.editorEl.querySelector('.toastui-editor-ww-container .ProseMirror');
+      if (pm)
+        pm.setAttribute('spellcheck', String(App.settings.spellcheck));
+    }
+  }
+
   function setView(doc, view) {
     flush(doc);
     const st = state(doc);
@@ -721,5 +853,5 @@ const Markdown = (() => {
     doc.md = null;
   }
 
-  return {isMd, formatted, layout, bar, flush, drop, wire, extractMath, pathOf, addressFor};
+  return {isMd, isHtml, formatted, sourceKey, spellcheck, showSource: doc => setView(doc, 'source'), layout, bar, flush, drop, wire, extractMath, pathOf, addressFor};
 })();

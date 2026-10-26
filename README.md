@@ -11,10 +11,12 @@ A simple text editor as a [Peergos](https://peergos.org) custom app, for the tex
   file changed or deleted elsewhere since it was opened is never overwritten without asking.
 - **Nothing on the device:** no texts, drafts, file names or settings in browser storage – everything the editor
   keeps is in Peergos, encrypted.
-- **File menu:** New, Open…, Recent files, Save (Ctrl+S), Save as…, Rename…, Import…, Export…, Close. **Open…** and
-  **Save as…** browse the folders you let the editor use (Peergos asks once and remembers them); any other file can
-  be picked with Peergos' file picker. **Import…** brings a text file from your device into Peergos, **Export…**
-  downloads the text shown to your device.
+- **File menu:** New, Open…, Recent files, Save (Ctrl+S), Save as…, Rename…, Find… (Ctrl+F), Replace… (Ctrl+H),
+  Import…, Export…, Close. **Open…** and **Save as…** browse the folders you let the editor use (Peergos asks once
+  and remembers them) and start where you opened a file last; any other file can be picked with Peergos' file
+  picker. **Import…** brings a text file from your device into Peergos, **Export…** downloads the text shown to your
+  device.
+- Tab indents, a word count in the bar, optional spell check.
 - **Undo and redo** (also Ctrl+Z, Ctrl+Y), with an optional **Edit history** panel to go back to any step; kept
   only while the file is open.
 - A start link (to bookmark) opens the editor as you left it, on any device: your tabs, your one file, or the
@@ -25,6 +27,7 @@ A simple text editor as a [Peergos](https://peergos.org) custom app, for the tex
 - **Markdown** files open formatted and are edited as they look (headings, lists, task lists, tables, code, links,
   pictures, math, sub- and superscript); **Source** shows the exact text; optional formatting buttons. Editing
   formatted changes only the parts you edit - the rest of the file keeps its own Markdown exactly.
+- **HTML** files open as a page (without their scripts), with **Source** for the HTML text.
 - Ten themes, text size (also with the mouse wheel), interface size, font, line wrapping, optional line numbers –
   under **Options**, applied and saved at once in Peergos.
 - A side panel for notes or the edit history, switched with the **Notes** and **History** buttons, as wide as you

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0
+Added
+- **Find and Replace** (Ctrl+F, Ctrl+H, also in the File menu): next and previous (Enter, Shift+Enter, F3),
+  match case, whole words, replace one or all (Undo takes it back); the match is marked while you type in Find.
+- **Tab** types a tab and indents selected lines, **Shift+Tab** takes it back (Escape, then Tab, leaves the text).
+- **Word count** in the bar (words and characters, of the selection too); Options → Word count.
+- **Options → Spell check**, also in the formatted Markdown view.
+- **Ctrl+B** and **Ctrl+I** in Markdown Source write bold and italic.
+- **HTML files** open as a browser shows them (as Peergos' own viewer does): their styles, pictures and stylesheets
+  from granted folders, links to files there; scripts are not run. **Source** shows the HTML text, **Preview** the
+  page again.
+
+Changed
+- Editing a big Markdown file formatted stays smooth: only the changed blocks are converted after each pause
+  (a 0.2 MB file took 0.15 s per pause before). A Markdown file over 400 000 characters opens as text, as the
+  formatted view takes long to load; Formatted shows it anyway.
+- **Open…** starts in the folder of the file opened last (kept with the recent files, so on every device);
+  **Save as…** of a new text starts there too.
+
 ## 1.4.0
 Added
 - **Markdown files** (.md) open formatted and are edited as they look (WYSIWYG), shown as Peergos' own viewer

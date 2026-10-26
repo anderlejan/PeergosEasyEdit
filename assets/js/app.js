@@ -17,7 +17,8 @@ const $ = id => document.getElementById(id);
 const DEFAULT_SETTINGS = {theme: 'green-on-black', wrapLines: true, fontSize: 14,
                           fontFamily: "'Lucida Console', 'Lucida Sans Typewriter', monospace",
                           autoSave: 5, lineNumbers: false, sidePanel: 'off', tabs: false, recent: 10, drafts: true,
-                          uiSize: 14, history: true, panelButtons: true, panelWidth: 0, mdTools: false};
+                          uiSize: 14, history: true, panelButtons: true, panelWidth: 0, mdTools: false,
+                          spellcheck: false, counts: true};
 const THEMES = ['light', 'dark', 'green-on-black', 'amber-on-black', 'sepia', 'solarized-light', 'solarized-dark', 'nord',
                 'blue', 'high-contrast'];
 
@@ -162,6 +163,7 @@ function refreshState() {
   $('saveAsBtn').disabled = !doc || !doc.loaded || doc.restoreOpen || doc.saving;
   $('closeMenuItem').disabled = !doc;
   $('exportMenuItem').disabled = !doc || !doc.loaded;
+  $('findMenuItem').disabled = $('replaceMenuItem').disabled = !doc || !doc.loaded;
   $('renameMenuItem').disabled = !doc || !doc.loaded || doc.saving || doc.renaming || doc.restoreOpen;
   const editable = canEdit(doc);
   $('undoBtn').disabled = !editable || (!!doc.history && !doc.history.canUndo);
@@ -231,6 +233,8 @@ function renderTabs() {
 function activate(doc) {
   active = doc;
   refreshState();
+  Counts.show();
+  Find.activated();
   renderTabs();
   LineNumbers.refresh();
   EditPanel.render();
@@ -246,7 +250,26 @@ function addDoc(doc) {
     Docs.edited(doc, editKind(e.inputType));
     if (doc === active && settings.lineNumbers)
       LineNumbers.later();
+    if (doc === active) {
+      Counts.later();
+      Find.textChanged();
+    }
   });
+  // Tab indents (Shift+Tab takes it back); after Escape the next Tab moves on, as usual, for keyboard users
+  let tabMovesOn = false;
+  doc.area.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      tabMovesOn = true;
+      return;
+    }
+    if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey || doc.area.readOnly || tabMovesOn) {
+      tabMovesOn = false;
+      return;
+    }
+    e.preventDefault();
+    indent(doc.area, e.shiftKey);
+  });
+  doc.area.addEventListener('keydown', e => Markdown.sourceKey(doc, e));
   // the editor's own undo and redo, also from the browser's context menu
   doc.area.addEventListener('beforeinput', e => {
     if (doc.history && (e.inputType === 'historyUndo' || e.inputType === 'historyRedo')) {
@@ -263,7 +286,12 @@ function addDoc(doc) {
       if (k === 'y' || e.shiftKey) redo(); else undo();
     }
   });
-  doc.area.addEventListener('scroll', () => { if (doc === active) LineNumbers.follow(); });
+  doc.area.addEventListener('scroll', () => {
+    if (doc === active) {
+      LineNumbers.follow();
+      Find.follow();
+    }
+  });
   applyLook(doc.area);
   return doc;
 }
@@ -349,10 +377,12 @@ async function openLoc(loc, options = {}) {
   return doc;
 }
 
+// Open… starts in the folder of the file opened last (recent files are kept in Peergos: on every device), else in
+// the folder of the file shown.
 async function openDialog() {
   if (!Files.supported())
     return openWithPicker();
-  const loc = await Files.show('open', '', active && (active.lasting || active.loc));
+  const loc = await Files.show('open', '', recentPlace() || (active && (active.lasting || active.loc)));
   if (!loc)
     return;
   if (loc.picker)
@@ -506,6 +536,16 @@ function markRecentMissing(loc) {
   }
 }
 
+// The file opened last that lies in a granted folder (opened from the Drive counts when its folder is granted).
+function recentPlace() {
+  for (const r of recent) {
+    const loc = r.loc.kind === 'grant' ? r.loc : r.loc.path ? Files.inGrant(r.loc.path) : null;
+    if (loc && Files.grantPath(loc.grantId))
+      return loc;
+  }
+  return null;
+}
+
 function forgetRecent(key) {
   recent = recent.filter(r => r.key !== key);
   saveRecent();
@@ -651,7 +691,7 @@ function cleanSettings(s) {
     if (Number.isFinite(s.fontSize)) out.fontSize = clamp(s.fontSize, FONT_SIZE_RANGE);
     if (typeof s.fontFamily === 'string' && s.fontFamily.length < 200) out.fontFamily = s.fontFamily;
     if (AUTOSAVE_CHOICES.includes(s.autoSave)) out.autoSave = s.autoSave;
-    for (const k of ['lineNumbers', 'tabs', 'drafts', 'history', 'panelButtons', 'mdTools'])
+    for (const k of ['lineNumbers', 'tabs', 'drafts', 'history', 'panelButtons', 'mdTools', 'spellcheck', 'counts'])
       if (typeof s[k] === 'boolean') out[k] = s[k];
     if (Number.isFinite(s.panelWidth)) out.panelWidth = s.panelWidth > 0 ? clamp(s.panelWidth, PANEL_WIDTH_RANGE) : 0;
     if (RECENT_CHOICES.includes(s.recent)) out.recent = s.recent;
@@ -663,6 +703,7 @@ function cleanSettings(s) {
 }
 
 function applyLook(area) {
+  area.spellcheck = settings.spellcheck;
   area.classList.toggle('wrap', settings.wrapLines);
   area.style.fontSize = settings.fontSize + 'px';
   area.style.fontFamily = settings.fontFamily;
@@ -689,6 +730,9 @@ function applySettings() {
   $('sidePanelSelect').value = settings.sidePanel;
   $('panelButtonsCheck').checked = settings.panelButtons;
   $('mdToolsCheck').checked = settings.mdTools;
+  $('spellCheck').checked = settings.spellcheck;
+  $('countsCheck').checked = settings.counts;
+  Counts.later();
   $('panelButtons').hidden = !settings.panelButtons;
   $('notesPanelBtn').setAttribute('aria-pressed', String(settings.sidePanel === 'notes'));
   $('historyPanelBtn').setAttribute('aria-pressed', String(settings.sidePanel === 'history'));
@@ -892,6 +936,331 @@ function wireFontWheel() {
     LineNumbers.later();
   }, {passive: false});
 }
+
+/* ---------- typing helpers: Tab, word count ---------- */
+
+// Text typed into the text box as if by the user: the browser's undo and the editor's history both get it.
+function insertText(area, text) {
+  area.focus();
+  if (!document.execCommand('insertText', false, text)) {
+    area.setRangeText(text, area.selectionStart, area.selectionEnd, 'end');
+    area.dispatchEvent(new Event('input'));
+  }
+}
+
+// Tab: a tab character, or - with several lines selected - a tab before each of them. Shift+Tab: one tab (or up to
+// four spaces) less before each line of the selection.
+function indent(area, out) {
+  const v = area.value, s = area.selectionStart, e = area.selectionEnd;
+  const several = v.slice(s, e).includes('\n');
+  if (!out && !several) {
+    insertText(area, '\t');
+    return;
+  }
+  const start = v.lastIndexOf('\n', s - 1) + 1;
+  const last = several && v[e - 1] === '\n' ? e - 1 : e;     // a selection ending at a line's start: not that line
+  let end = v.indexOf('\n', last);
+  if (end < 0)
+    end = v.length;
+  const before = v.slice(start, end);
+  const after = before.split('\n').map(l => out ? l.replace(/^(\t| {1,4})/, '') : '\t' + l).join('\n');
+  if (after === before)
+    return;
+  area.setSelectionRange(start, end);
+  insertText(area, after);
+  if (several)
+    area.setSelectionRange(start, start + after.length);
+  else
+    area.setSelectionRange(Math.max(start, s - (before.length - after.length)), Math.max(start, s - (before.length - after.length)));
+}
+
+// Words and characters (line breaks not counted) in the bar - of the selection, when there is one.
+const Counts = (() => {
+  let timer = null;
+  const words = t => (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu) || []).length;
+  const chars = t => t.replace(/[\r\n]/g, '').length - (t.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g) || []).length;
+  const n = x => x.toLocaleString();
+
+  function show() {
+    timer = null;
+    const box = $('counts');
+    box.hidden = !settings.counts || !active || !active.loaded;
+    if (box.hidden)
+      return;
+    const a = active.area, text = a.value;
+    const sel = document.activeElement === a && a.selectionEnd > a.selectionStart ? text.slice(a.selectionStart, a.selectionEnd) : '';
+    box.textContent = sel ? n(words(sel)) + ' of ' + n(words(text)) + ' words · ' + n(chars(sel)) + ' of ' + n(chars(text)) + ' characters'
+                          : n(words(text)) + ' words · ' + n(chars(text)) + ' characters';
+  }
+
+  function later() {
+    if (!timer)
+      timer = setTimeout(show, 250);
+  }
+
+  document.addEventListener('selectionchange', () => { if (active && document.activeElement === active.area) later(); });
+  return {later, show, words, chars};
+})();
+
+/* ---------- Find and Replace (Ctrl+F, Ctrl+H) ---------- */
+
+// Works on the text in the text box. Its selection does not show while the find field has the focus, so the match is
+// marked with a box drawn over it, placed by a hidden copy of the text box (same font, width and wrapping).
+const Find = (() => {
+  let hits = [];        // [start, end] of every match in the text shown
+  let current = -1;
+  let boxes = [];
+  let mirror = null;
+  const open = () => !$('findBar').hidden;
+
+  function pattern() {
+    const q = $('findInput').value;
+    if (!q)
+      return null;
+    let src = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if ($('findWord').checked)
+      src = '(?<![\\p{L}\\p{N}_])' + src + '(?![\\p{L}\\p{N}_])';
+    return new RegExp(src, 'gu' + ($('findCase').checked ? '' : 'i'));
+  }
+
+  function search() {
+    hits = [];
+    const re = pattern();
+    if (re && active && active.loaded)
+      for (const m of active.area.value.matchAll(re)) {
+        hits.push([m.index, m.index + m[0].length]);
+        if (hits.length >= 100000)
+          break;
+      }
+  }
+
+  function showCount() {
+    $('findCount').textContent = !$('findInput').value ? '' : hits.length ? (current + 1) + ' of ' + hits.length.toLocaleString()
+                                                                          : 'No matches';
+    $('findInput').classList.toggle('none', !!$('findInput').value && !hits.length);
+    const editable = canEdit(active) && !(active && Markdown.formatted(active));
+    $('replaceOne').disabled = $('replaceAll').disabled = !editable || !hits.length;
+  }
+
+  // the match at or after the caret (forwards) or before it
+  function nearest(forward, from) {
+    if (!hits.length)
+      return -1;
+    if (forward) {
+      const i = hits.findIndex(h => h[0] >= from);
+      return i < 0 ? 0 : i;
+    }
+    for (let i = hits.length - 1; i >= 0; i--)
+      if (hits[i][1] <= from)
+        return i;
+    return hits.length - 1;
+  }
+
+  function select(i) {
+    current = i;
+    showCount();
+    clearMarks();
+    if (i < 0)
+      return;
+    const a = active.area;
+    a.setSelectionRange(hits[i][0], hits[i][1]);
+    place(true);
+  }
+
+  function clearMarks() {
+    for (const b of boxes)
+      b.remove();
+    boxes = [];
+  }
+
+  // where the current match is in the text box, measured on the copy; scrolled into view when asked
+  function place(scroll) {
+    clearMarks();
+    if (current < 0 || !active || !hits[current] || active.area.hidden)
+      return;
+    const a = active.area;
+    const cs = getComputedStyle(a);
+    if (!mirror) {
+      mirror = el('div', {className: 'find-mirror'});
+      $('editorArea').append(mirror);
+    }
+    for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'paddingTop',
+                     'paddingRight', 'paddingBottom', 'paddingLeft', 'tabSize', 'whiteSpace', 'overflowWrap', 'wordBreak'])
+      mirror.style[k] = cs[k];
+    mirror.style.width = a.clientWidth + 'px';
+    const [s, e] = hits[current];
+    const v = a.value;
+    let lineEnd = v.indexOf('\n', e);
+    if (lineEnd < 0)
+      lineEnd = v.length;
+    const mark = el('span', {textContent: v.slice(s, e)});
+    mirror.replaceChildren(v.slice(0, s), mark, v.slice(e, lineEnd));
+    const base = mirror.getBoundingClientRect();
+    const rects = [...mark.getClientRects()].map(r => ({top: r.top - base.top, left: r.left - base.left, width: r.width, height: r.height}));
+    mirror.replaceChildren();
+    if (!rects.length)
+      return;
+    if (scroll) {
+      const r = rects[0];
+      if (r.top < a.scrollTop || r.top + r.height > a.scrollTop + a.clientHeight)
+        a.scrollTop = Math.max(0, r.top - a.clientHeight / 3);
+      if (r.left < a.scrollLeft || r.left + r.width > a.scrollLeft + a.clientWidth)
+        a.scrollLeft = Math.max(0, r.left - a.clientWidth / 3);
+    }
+    for (const r of rects) {
+      const top = r.top - a.scrollTop, left = r.left - a.scrollLeft;
+      if (top + r.height < 0 || top > a.clientHeight)
+        continue;
+      const b = el('div', {className: 'find-hit'});
+      Object.assign(b.style, {top: a.offsetTop + top + 'px', left: a.offsetLeft + left + 'px', width: r.width + 'px', height: r.height + 'px'});
+      $('editorArea').append(b);
+      boxes.push(b);
+    }
+  }
+
+  function refresh(fromCaret) {
+    search();
+    if (!active) {
+      showCount();
+      return;
+    }
+    const a = active.area;
+    select(nearest(true, fromCaret ? a.selectionStart : 0));
+  }
+
+  function show(replace) {
+    if (!active || !active.loaded)
+      return;
+    // in a Markdown or HTML file shown formatted, the text is searched in Source
+    if (Markdown.formatted(active))
+      Markdown.showSource(active);
+    $('findBar').hidden = false;
+    $('replaceRow').hidden = !replace;
+    const a = active.area;
+    const sel = a.value.slice(a.selectionStart, a.selectionEnd);
+    if (sel && !sel.includes('\n'))
+      $('findInput').value = sel;
+    $('findInput').focus();
+    $('findInput').select();
+    refresh(true);
+  }
+
+  function hide() {
+    if (!open())
+      return;
+    $('findBar').hidden = true;
+    clearMarks();
+    hits = [];
+    current = -1;
+    if (active && !active.area.hidden)
+      active.area.focus();
+  }
+
+  function next(forward) {
+    if (!open())
+      return show(false);
+    search();
+    if (!hits.length)
+      return select(-1);
+    const a = active.area;
+    const at = current >= 0 && hits[current] && a.selectionStart === hits[current][0] && a.selectionEnd === hits[current][1];
+    if (at)
+      select(forward ? (current + 1) % hits.length : (current - 1 + hits.length) % hits.length);
+    else
+      select(nearest(forward, forward ? a.selectionEnd : a.selectionStart));
+  }
+
+  function replaceOne() {
+    if (!hits.length || current < 0)
+      return;
+    const a = active.area;
+    const [s, e] = hits[current];
+    if (a.selectionStart !== s || a.selectionEnd !== e)
+      return select(current);
+    a.setSelectionRange(s, e);
+    insertText(a, $('replaceInput').value);
+    search();
+    select(nearest(true, s + $('replaceInput').value.length));
+    $('replaceInput').focus();
+  }
+
+  function replaceAll() {
+    const re = pattern();
+    if (!re || !hits.length)
+      return;
+    const a = active.area;
+    const count = hits.length;
+    const by = $('replaceInput').value;
+    const text = a.value.replace(re, () => by);
+    a.setSelectionRange(0, a.value.length);
+    insertText(a, text);
+    a.setSelectionRange(0, 0);
+    refresh(false);
+    toast(count.toLocaleString() + ' replaced.');
+    $('replaceInput').focus();
+  }
+
+  // the text or the file shown changed: the matches are found again, the mark follows
+  let timer = null;
+  function textChanged() {
+    if (!open())
+      return;
+    clearMarks();
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      search();
+      if (current >= hits.length)
+        current = hits.length - 1;
+      showCount();
+    }, 200);
+  }
+
+  function wire() {
+    $('findInput').addEventListener('input', () => refresh(true));
+    $('findCase').onchange = $('findWord').onchange = () => refresh(true);
+    $('findNext').onclick = () => next(true);
+    $('findPrev').onclick = () => next(false);
+    $('replaceOne').onclick = replaceOne;
+    $('replaceAll').onclick = replaceAll;
+    $('findClose').onclick = hide;
+    $('findMenuItem').onclick = () => show(false);
+    $('replaceMenuItem').onclick = () => show(true);
+    $('findInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        next(!e.shiftKey);
+      }
+    });
+    $('replaceInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        replaceOne();
+      }
+    });
+    $('findBar').addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        hide();
+      }
+    });
+    document.addEventListener('keydown', e => {
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'f' || k === 'h')) {
+        // Ctrl+F on a formatted Markdown or HTML view: the browser's own find, which searches what is shown
+        if (k === 'f' && active && Markdown.formatted(active))
+          return;
+        e.preventDefault();
+        show(k === 'h');
+      } else if (e.key === 'F3' && open()) {
+        e.preventDefault();
+        next(!e.shiftKey);
+      }
+    });
+    window.addEventListener('resize', () => place(false));
+  }
+
+  return {show, hide, next, wire, textChanged, follow: () => place(false), activated: () => { if (open()) refresh(true); }};
+})();
 
 /* ---------- import from and export to this device ---------- */
 
@@ -1348,6 +1717,13 @@ function wire() {
   PanelWidth.wire();
   wireFontWheel();
   Markdown.wire();
+  Find.wire();
+  Files.setPlaceHint(recentPlace);
+  $('spellCheck').onchange = e => {
+    changeSetting('spellcheck', e.target.checked);
+    Markdown.spellcheck();
+  };
+  $('countsCheck').onchange = e => changeSetting('counts', e.target.checked);      // Save as… of a new text starts there too
   $('importMenuItem').onclick = () => {
     $('importInput').value = '';
     $('importInput').click();

@@ -243,3 +243,22 @@ section h3 { margin: .4em 0; }
 .md-box .pee-mark { opacity: .45; }
 .md-box .pee-math-widget { cursor: default; }
 .md-box .pee-math-widget.display { display: block; text-align: center; margin: .4em 0; }
+/* HTML files: the page as a browser shows it, in a frame without scripts */
+.md-box .md-html { flex: 1; width: 100%; border: 0; background: #fff; }
+
+/* Find and Replace */
+.find-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 8px; background: var(--bar);
+            border-bottom: 1px solid var(--line); }
+.find-bar input[type=text] { width: 16em; max-width: 40vw; padding: 2px 6px; background: var(--panel); border: 1px solid var(--line);
+                             border-radius: 4px; }
+.find-bar input.none { border-color: #c0392b; }
+.find-bar .spacer { flex: 1; }
+.find-bar label { display: inline-flex; align-items: center; gap: 4px; }
+.replace-row { display: inline-flex; align-items: center; gap: 6px; }
+.find-count { min-width: 6em; opacity: .8; white-space: nowrap; }
+.find-close { border: 0; background: transparent; font-size: 1.15em; opacity: .7; }
+.counts { opacity: .65; font-size: .9em; white-space: nowrap; }
+.find-mirror { position: absolute; visibility: hidden; left: 0; top: 0; box-sizing: border-box; overflow-wrap: anywhere;
+               pointer-events: none; }
+.find-hit { position: absolute; background: rgba(255, 200, 0, .45); outline: 2px solid rgba(255, 170, 0, .9); border-radius: 2px;
+            pointer-events: none; z-index: 2; }
